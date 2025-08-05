@@ -39,80 +39,167 @@ output_dir = os.path.join(parent_dir, '05_OUTPUT_GENERATED')
 with open(config_path, "r") as f:
     class_names = json.load(f)
 
-# Load trained model - try hand-focused CNN+LSTM first
+# Set up device and paths
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+current_dir = os.path.dirname(os.path.abspath(__file__))
+
+# Import CNN base for all models
 try:
-    # Import from hand_focused_CNN_LSTM in the same directory
+    # Try to get cnn_base from hand_focused_CNN_LSTM
     import importlib.util
-    import os
-    
-    # Get the current script directory
-    current_dir = os.path.dirname(os.path.abspath(__file__))
     hand_focused_path = os.path.join(current_dir, "hand_focused_CNN_LSTM.py")
-    
     spec = importlib.util.spec_from_file_location("hand_focused_CNN_LSTM", hand_focused_path)
     hand_focused_module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(hand_focused_module)
-    
-    HandFocusedCNN_LSTM = hand_focused_module.HandFocusedCNN_LSTM
     cnn_base = hand_focused_module.cnn_base
-    MODEL_TYPE = "hand_focused"
-    print("Using Hand-Focused CNN-LSTM model")
-except (ImportError, AttributeError, FileNotFoundError) as e:
-    # Fallback to standard model in the fallback directory
-    print(f"Hand-focused model not available ({e}), using fallback model")
+    print("CNN base loaded from hand_focused_CNN_LSTM")
+except Exception as e:
+    # Fallback to standard model CNN base
     try:
-        # Try to import from fallback directory
         fallback_dir = os.path.join(os.path.dirname(current_dir), "02_FALLBACK_COMPATIBILITY")
         model_path = os.path.join(fallback_dir, "model.py")
-        
         spec = importlib.util.spec_from_file_location("model", model_path)
         model_module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(model_module)
-        
-        CNN_LSTM = model_module.CNN_LSTM
         cnn_base = model_module.cnn_base
-        MODEL_TYPE = "standard"
-        print("Using standard CNN-LSTM model")
+        print("CNN base loaded from fallback model")
     except Exception as fallback_error:
-        print(f"Error loading fallback model: {fallback_error}")
-        print("Please ensure the model files are available")
+        print(f"Error loading CNN base: {fallback_error}")
         sys.exit(1)
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# Load trained model - try forced selection first, then auto-detection
+forced_model_path = os.environ.get('SASL_FORCE_MODEL_PATH')
+model = None
+MODEL_TYPE = None
 
-# Initialize model based on availability
-if MODEL_TYPE == "hand_focused":
-    model = HandFocusedCNN_LSTM(
-        cnn=cnn_base, 
-        num_classes=len(class_names),
-        hidden_size=256,
-        num_layers=2,
-        dropout=0.3
-    ).to(device)
+def load_model_from_checkpoint(model_path, checkpoint_data):
+    """Load model based on checkpoint structure"""
+    global model, MODEL_TYPE
     
-    # Try to load hand-focused model, fallback to standard model
+    # Detect model architecture type based on checkpoint keys
+    if 'lstm.weight_ih_l0_reverse' not in checkpoint_data and 'attention.in_proj_weight' not in checkpoint_data:
+        # This is a FastCNNLSTM (GPU-optimized) model
+        print(f"Detected FastCNNLSTM model")
+        
+        # Import and create FastCNNLSTM model
+        import importlib.util
+        gpu_training_path = os.path.join(current_dir, "gpu_optimized_training.py")
+        spec = importlib.util.spec_from_file_location("gpu_optimized_training", gpu_training_path)
+        gpu_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(gpu_module)
+        
+        FastCNNLSTM = gpu_module.FastCNNLSTM
+        model = FastCNNLSTM(num_classes=len(class_names)).to(device)
+        model.load_state_dict(checkpoint_data)
+        MODEL_TYPE = "gpu_optimized"
+        print(f"Successfully loaded FastCNNLSTM model")
+        return True
+        
+    elif 'lstm.weight_ih_l0_reverse' in checkpoint_data and 'attention.in_proj_weight' in checkpoint_data:
+        # This is a HandFocusedCNN_LSTM or HybridOptimizedCNN_LSTM model
+        if "hybrid" in model_path.lower():
+            print(f"Detected Hybrid CPU+GPU model")
+            
+            # Import hybrid model
+            import importlib.util
+            hybrid_training_path = os.path.join(current_dir, "hybrid_cpu_gpu_training.py")
+            spec = importlib.util.spec_from_file_location("hybrid_cpu_gpu_training", hybrid_training_path)
+            hybrid_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(hybrid_module)
+            
+            HybridOptimizedCNN_LSTM = hybrid_module.HybridOptimizedCNN_LSTM
+            model = HybridOptimizedCNN_LSTM(
+                cnn=cnn_base, 
+                num_classes=len(class_names),
+                hidden_size=256,
+                num_layers=2,
+                dropout=0.3
+            ).to(device)
+            MODEL_TYPE = "hybrid_cpu_gpu"
+        else:
+            print(f"Detected Hand-Focused model")
+            
+            # Import hand-focused model
+            import importlib.util
+            hand_focused_path = os.path.join(current_dir, "hand_focused_CNN_LSTM.py")
+            spec = importlib.util.spec_from_file_location("hand_focused_CNN_LSTM", hand_focused_path)
+            hand_focused_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(hand_focused_module)
+            
+            HandFocusedCNN_LSTM = hand_focused_module.HandFocusedCNN_LSTM
+            model = HandFocusedCNN_LSTM(
+                cnn=cnn_base, 
+                num_classes=len(class_names),
+                hidden_size=256,
+                num_layers=2,
+                dropout=0.3
+            ).to(device)
+            MODEL_TYPE = "hand_focused"
+        
+        model.load_state_dict(checkpoint_data)
+        print(f"Successfully loaded {MODEL_TYPE} model")
+        return True
+    
+    return False
+
+# Try forced model selection first
+if forced_model_path and os.path.exists(forced_model_path):
+    print(f"Using forced model selection: {forced_model_path}")
+    try:
+        checkpoint = torch.load(forced_model_path, map_location=device)
+        if load_model_from_checkpoint(forced_model_path, checkpoint):
+            print(f"Forced model loaded successfully")
+        else:
+            print("Unknown model architecture, falling back to auto-detection")
+            forced_model_path = None
+    except Exception as e:
+        print(f"Error loading forced model: {e}")
+        print("Falling back to auto-detection")
+        forced_model_path = None
+
+# Auto-detection if no forced model or forced model failed
+if model is None:
+    print("Starting auto-detection...")
+    
+    # Try to load models with smart architecture detection - check all model types
     model_paths = [
+        # GPU-optimized models
+        os.path.join(output_dir, "gpu_optimized_sasl_model.pth"),
+        os.path.join(output_dir, "best_gpu_optimized_sasl_model.pth"),
+        # Hybrid models  
+        os.path.join(output_dir, "hybrid_cpu_gpu_sasl_model.pth"),
+        os.path.join(output_dir, "best_hybrid_cpu_gpu_sasl_model.pth"),
+        # Original hand-focused models
         os.path.join(output_dir, "hand_focused_sasl_model.pth"),
         os.path.join(output_dir, "best_hand_focused_sasl_model.pth"),
-        "hand_focused_sasl_model.pth",  # Local fallback
-        "best_hand_focused_sasl_model.pth"  # Local fallback
+        # Local fallbacks
+        "gpu_optimized_sasl_model.pth",
+        "hybrid_cpu_gpu_sasl_model.pth", 
+        "hand_focused_sasl_model.pth",
+        "best_hand_focused_sasl_model.pth"
     ]
     
     model_loaded = False
     for model_path in model_paths:
-        try:
-            model.load_state_dict(torch.load(model_path, map_location=device))
-            print(f"Loaded hand-focused model weights from {model_path}")
-            model_loaded = True
-            break
-        except FileNotFoundError:
-            continue
+        if os.path.exists(model_path):
+            try:
+                checkpoint = torch.load(model_path, map_location=device)
+                if load_model_from_checkpoint(model_path, checkpoint):
+                    print(f"Auto-detected and loaded model from {model_path}")
+                    model_loaded = True
+                    break
+            except Exception as e:
+                if "size mismatch" in str(e) or "Missing key" in str(e):
+                    print(f"Architecture mismatch in {model_path}, trying next...")
+                    continue
+                else:
+                    continue
     
+    # Final fallback to standard model if nothing worked
     if not model_loaded:
-        print("Hand-focused model not found, using standard model")
-        # We need to import CNN_LSTM if we're falling back
+        print("No compatible trained models found, using standard CNN-LSTM")
         try:
-            # Import from fallback directory
+            # Import standard model
             fallback_dir = os.path.join(os.path.dirname(current_dir), "02_FALLBACK_COMPATIBILITY")
             model_path_fallback = os.path.join(fallback_dir, "model.py")
             
@@ -123,49 +210,19 @@ if MODEL_TYPE == "hand_focused":
             CNN_LSTM = model_module.CNN_LSTM
             model = CNN_LSTM(cnn=cnn_base, num_classes=len(class_names)).to(device)
             MODEL_TYPE = "standard"
+            print("Using standard CNN-LSTM model (no trained weights)")
         except Exception as e:
-            print(f"Error loading standard model class: {e}")
+            print(f"Error loading standard model: {e}")
             print("!!! Could not load any model! Please check your installation.")
             sys.exit(1)
-        
-        # Try to load standard model
-        standard_model_paths = [
-            os.path.join(output_dir, "sasl_model.pth"),
-            "sasl_model.pth"  # Local fallback
-        ]
-        
-        for model_path in standard_model_paths:
-            try:
-                model.load_state_dict(torch.load(model_path, map_location=device))
-                print(f"Loaded standard model weights from {model_path}")
-                MODEL_TYPE = "standard"
-                break
-            except FileNotFoundError:
-                continue
-        else:
-            print("!!! No trained model found! Please train a model first.")
-            print("Run: python main.py -> Option 1 to train a model")
-            sys.exit(1)
-else:
-    # Standard model - need to import CNN_LSTM
-    try:
-        # Import from fallback directory
-        fallback_dir = os.path.join(os.path.dirname(current_dir), "02_FALLBACK_COMPATIBILITY")
-        model_path_fallback = os.path.join(fallback_dir, "model.py")
-        
-        spec = importlib.util.spec_from_file_location("model", model_path_fallback)
-        model_module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(model_module)
-        
-        CNN_LSTM = model_module.CNN_LSTM
-        model = CNN_LSTM(cnn=cnn_base, num_classes=len(class_names)).to(device)
-        model.load_state_dict(torch.load("sasl_model.pth", map_location=device))
-    except Exception as e:
-        print(f"Error loading standard model: {e}")
-        print("!!! Could not load standard model! Please check your installation.")
-        sys.exit(1)
 
+# Evaluation mode
 model.eval()
+print(f"Model ready: {MODEL_TYPE.upper()} architecture")
+
+# Clean up environment variable
+if 'SASL_FORCE_MODEL_PATH' in os.environ:
+    del os.environ['SASL_FORCE_MODEL_PATH']
 
 # Transformation
 transform = transforms.Compose([
@@ -201,6 +258,7 @@ def extract_hand_region_from_frame(frame, hand_detector):
         return frame
     except Exception as e:
         print(f"Hand detection error: {e}")
+        return frame
         return frame
 
 class EnhancedGestureDetector:
@@ -264,12 +322,17 @@ class EnhancedGestureDetector:
                 # Get stable prediction
                 stable_prediction = self._get_stable_prediction()
                 
-                # Get attention weights if available (for hand-focused model)
+                # Get model-specific information
                 attention_info = None
-                if hasattr(model, 'attention') and MODEL_TYPE == "hand_focused":
-                    # This is simplified - in practice you'd need to modify the model
-                    # to return attention weights
-                    attention_info = "Hand-focused attention active"
+                if hasattr(model, 'attention') and MODEL_TYPE in ["hand_focused", "hybrid_cpu_gpu"]:
+                    if MODEL_TYPE == "hand_focused":
+                        attention_info = "Hand-focused attention active"
+                    elif MODEL_TYPE == "hybrid_cpu_gpu":
+                        attention_info = "Hybrid CPU+GPU with attention"
+                elif MODEL_TYPE in ["gpu_optimized", "fast_cnn_lstm"]:
+                    attention_info = "GPU-optimized (streamlined)"
+                elif MODEL_TYPE == "standard":
+                    attention_info = "Standard CNN-LSTM"
                 
                 return stable_prediction, confidence_score, attention_info
                 

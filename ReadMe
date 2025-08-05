@@ -11,7 +11,7 @@ python main.py
 - 🚀 **GPU Training** - 10x faster training with NVIDIA GPUs (1-2 hours vs 10+ hours)
 - 💻 **CPU Training** - Universal compatibility for all systems
 - ⚡ **Hybrid Training** - Optimal CPU+GPU workload distribution
-- 🎥 **GPU-Optimized Camera** - 25+ FPS real-time recognition vs 2-5 FPS CPU
+- 🎥 **Enhanced Camera** - Real-time recognition with hand tracking overlays
 
 ---
 
@@ -24,7 +24,7 @@ python main.py
 - **Automatic Optimization**: Smart batch size and memory management for your hardware
 
 ### 🎥 Real-Time Recognition Options
-- **GPU-Optimized Camera**: 25+ FPS with <40ms latency for real-time responsiveness
+- **Enhanced Camera**: Real-time recognition with model selection and hand tracking
 - **Standard Camera**: 2-5 FPS CPU processing for universal compatibility
 - **Live Performance Monitoring**: GPU memory, inference time, and FPS tracking
 
@@ -73,7 +73,7 @@ pip install torch torchvision opencv-python mediapipe numpy scikit-learn
 ### GPU Training (Optional but Recommended)
 - **NVIDIA GPU** with 4GB+ VRAM
 - **CUDA-compatible PyTorch** installation
-- **Benefits**: 10x faster training, real-time GPU camera (25+ FPS)
+- **Benefits**: 10x faster training, enhanced camera with model selection
 
 **Alternative installations:**
 ```bash
@@ -112,7 +112,7 @@ Run `python main.py` and choose:
 
 ### 🎥 **Option 3: Real-Time Recognition with Hand Tracking**
 **Camera options:**
-- **GPU-Optimized Camera** - 25+ FPS with real-time metrics
+- **Enhanced Camera** - Real-time recognition with model selection
 - **Standard Camera** - 2-5 FPS CPU processing
 
 ### 📽️ **Option 4: Video Analysis & Hand Tracking Demo**
@@ -131,7 +131,7 @@ Run `python main.py` and choose:
 ├── gpu_optimized_training.py      # 🚀 GPU training (10x faster)
 ├── hybrid_cpu_gpu_training.py     # ⚡ Hybrid CPU+GPU training
 ├── hand_focused_CNN_LSTM.py       # 💻 CPU training (universal)
-├── gpu_optimized_camera.py        # 🎥 GPU camera (25+ FPS)
+├── enhanced_camera.py             # 🎥 Enhanced camera with model selection
 ├── enhanced_camera.py             # 📹 Standard camera (2-5 FPS)
 ├── hand_tracking_demo.py          # 📽️ Video analysis tool
 └── hand_detection.py              # 🖐️ Core hand detection
@@ -188,7 +188,7 @@ dataset/
    - **CPU Training**: For universal compatibility
 
 4. **Test Recognition (Option 3):**
-   - **GPU Camera**: For real-time performance (25+ FPS)
+   - **Enhanced Camera**: For real-time performance with model selection
    - **Standard Camera**: For basic recognition (2-5 FPS)
 
 ### 🧠 **Training Options Detailed**
@@ -235,14 +235,15 @@ python 01_PRIMARY_SYSTEM/hand_focused_CNN_LSTM.py
 
 ### 🎥 **Real-Time Recognition Options**
 
-#### 🚀 **GPU-Optimized Camera (FASTEST)**
+#### 🚀 **Enhanced Camera with Model Selection**
 ```bash
-# Via menu: Option 3 → Option 2
+# Via menu: Option 3 → Select your model
 # Direct command:
-python 01_PRIMARY_SYSTEM/gpu_optimized_camera.py
+python 01_PRIMARY_SYSTEM/enhanced_camera.py
 ```
-**Performance:**
-- ⚡ **25+ FPS** real-time recognition
+**Features:**
+- 🎯 **Model Selection** - Choose which trained model to use
+- 🎥 **Real-time Recognition** with hand tracking overlays
 - 🎯 **<40ms latency** for responsiveness
 - 🧠 **GPU-accelerated inference** with mixed precision
 - 📊 **Live performance monitoring** (GPU memory, inference time, FPS)
@@ -361,7 +362,7 @@ python 01_PRIMARY_SYSTEM/hand_tracking_demo.py
 - `gpu_optimized_training.py` - **GPU training script (10x faster)**
 - `hybrid_cpu_gpu_training.py` - **Hybrid CPU+GPU training**
 - `hand_focused_CNN_LSTM.py` - **CPU training with hand detection**
-- `gpu_optimized_camera.py` - **GPU camera (25+ FPS)**
+- `enhanced_camera.py` - **Enhanced camera with model selection**
 - `enhanced_camera.py` - **Standard camera with hand tracking**
 - `hand_tracking_demo.py` - **Video analysis and demonstration**
 - `hand_detection.py` - **MediaPipe hand detection core**
@@ -419,7 +420,7 @@ python 01_PRIMARY_SYSTEM/hybrid_cpu_gpu_training.py
 python 01_PRIMARY_SYSTEM/hand_focused_CNN_LSTM.py
 
 # GPU Camera (fastest recognition)
-python 01_PRIMARY_SYSTEM/gpu_optimized_camera.py
+python 01_PRIMARY_SYSTEM/enhanced_camera.py
 
 # Standard Camera
 python 01_PRIMARY_SYSTEM/enhanced_camera.py
@@ -479,7 +480,7 @@ python -c "import cv2; cap = cv2.VideoCapture(0); print('Camera OK' if cap.isOpe
 
 #### Low Performance Issues
 - **For Training**: Use GPU training for 10x speedup
-- **For Camera**: Use GPU-optimized camera for 25+ FPS
+- **For Camera**: Use enhanced camera with model selection for optimal performance
 - **For Systems**: Check benchmark results and follow recommendations
 
 ---

@@ -17,6 +17,7 @@ from PIL import Image
 import cv2
 import numpy as np
 import json
+import argparse
 from hand_detection import HandDetector, extract_hand_focused_frames
 
 batch_size = 10
@@ -380,8 +381,19 @@ def load_dataset_from_folder(root_dir):
 
     return video_paths, labels, class_names
 
-def main():
+def main(batch_size_arg=None, epochs_arg=None):
     """Main training function - FIXED for Windows multiprocessing"""
+    global batch_size, num_epochs
+    
+    # Override defaults if arguments provided
+    if batch_size_arg is not None:
+        batch_size = batch_size_arg
+    if epochs_arg is not None:
+        num_epochs = epochs_arg
+    
+    print(f"> Using batch size: {batch_size}")
+    print(f"> Training for {num_epochs} epochs")
+    
     # Configuration
     ENABLE_VALIDATION = True
     USE_HAND_DETECTION = True
@@ -556,7 +568,7 @@ def main():
             train_total += labels_batch.size(0)
             
             if batch_idx % 10 == 0:
-                print(f"Epoch {epoch+1}/{num_epochs}, Batch {batch_idx}, Loss: {loss.item():.4f}")
+                print(f"Epoch {epoch+1}/{num_epochs}, Batch {batch_idx}/{len(train_loader)}, Loss: {loss.item():.4f}")
 
         avg_train_loss = total_loss / len(train_loader)
         train_acc = train_correct / train_total
@@ -623,4 +635,10 @@ def main():
     print(f"Final training dataset size: {len(train_dataset)} samples")
 
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser(description='Hand-Focused CNN-LSTM SASL Training')
+    parser.add_argument('--batch_size', type=int, default=None, help='Batch size for training')
+    parser.add_argument('--epochs', type=int, default=None, help='Number of epochs to train')
+    
+    args = parser.parse_args()
+    
+    main(batch_size_arg=args.batch_size, epochs_arg=args.epochs)

@@ -42,5 +42,7 @@ Thumbs.db
 *.tmp
 *.temp
 
-# json files
-*.json
+# Output folder - ignore contents but keep folder structure
+05_OUTPUT_GENERATED/*
+!05_OUTPUT_GENERATED/
+!05_OUTPUT_GENERATED/.gitkeep

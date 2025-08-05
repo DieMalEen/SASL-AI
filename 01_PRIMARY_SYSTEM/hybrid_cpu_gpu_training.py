@@ -18,6 +18,7 @@ from sklearn.model_selection import train_test_split
 from PIL import Image
 import cv2
 import numpy as np
+import argparse
 import json
 import time
 import threading
@@ -42,7 +43,7 @@ class HybridCPUGPUTrainingSystem:
         else:
             self.cpu_workers = cpu_workers
         
-        print(f"🔥 Hybrid CPU+GPU Training System Initialized")
+        print(f"+ Hybrid CPU+GPU Training System Initialized")
         print(f"   GPU Available: {self.gpu_available}")
         print(f"   Device: {self.device}")
         print(f"   CPU Workers: {self.cpu_workers}")
@@ -323,7 +324,7 @@ def print_system_usage(device):
     cpu_percent = os.getloadavg()[0] if hasattr(os, 'getloadavg') else 'N/A'
     print(f"   CPU Usage: {cpu_percent}")
 
-def main():
+def main(batch_size_arg=None, epochs_arg=None):
     """Main hybrid training function"""
     
     # Initialize hybrid system
@@ -335,11 +336,15 @@ def main():
     USE_HAND_DETECTION = True
     USE_MIXED_PRECISION = hybrid_system.gpu_available
     
-    # Get optimal batch size
-    batch_size = hybrid_system.get_optimal_batch_size()
-    print(f"🎯 Hybrid-optimized batch size: {batch_size}")
+    # Get optimal batch size or use provided
+    if batch_size_arg is not None:
+        batch_size = batch_size_arg
+    else:
+        batch_size = hybrid_system.get_optimal_batch_size()
     
-    print("\n📊 Loading dataset with hybrid CPU+GPU processing...")
+    print(f"> Using batch size: {batch_size}")
+    
+    print("\n| Loading dataset with hybrid CPU+GPU processing...")
     
     # Find dataset
     dataset_paths = ["../dataset", "dataset", "./dataset"]
@@ -375,9 +380,17 @@ def main():
         single_video_classes = unique_labels[label_counts == 1]
         
         if len(single_video_classes) > 0:
-            print(f"Found {len(single_video_classes)} classes with only 1 video each")
+            print(f"!!! Found {len(single_video_classes)} classes with only 1 video each")
+            print(f"Classes: {[class_names[i] for i in single_video_classes]}")
+            print("These will be used for training only (no test split)")
             
-            # Handle single-video classes
+            # Separate single-video and multi-video classes
+            train_paths = []
+            test_paths = []
+            train_labels = []
+            test_labels = []
+            
+            # Collect multi-video class data
             multi_video_paths = []
             multi_video_labels = []
             for path, label in zip(video_paths, labels):
@@ -385,11 +398,13 @@ def main():
                     multi_video_paths.append(path)
                     multi_video_labels.append(label)
             
+            # Split multi-video classes if possible
             if multi_video_paths and len(multi_video_paths) >= 6:
                 train_multi, test_multi, train_multi_labels, test_multi_labels = train_test_split(
                     multi_video_paths, multi_video_labels, test_size=0.25, random_state=42
                 )
                 
+                # Add single-video classes to training
                 single_video_paths = [path for path, label in zip(video_paths, labels) if label in single_video_classes]
                 single_video_labels = [label for label in labels if label in single_video_classes]
                 
@@ -397,13 +412,17 @@ def main():
                 train_labels = train_multi_labels + single_video_labels
                 test_paths = test_multi
                 test_labels = test_multi_labels
+                print("Using non-stratified split due to limited multi-video data")
             else:
+                # Use all data for training
                 train_paths = video_paths
                 train_labels = labels
                 test_paths = []
                 test_labels = []
                 ENABLE_VALIDATION = False
+                print("Insufficient data for validation - training without validation")
         else:
+            # Normal stratified split
             train_paths, test_paths, train_labels, test_labels = train_test_split(
                 video_paths, labels, test_size=0.2, random_state=42, stratify=labels
             )
@@ -461,14 +480,14 @@ def main():
         dropout=0.3
     ).to(device)
 
-    print(f"🧠 Using Hybrid-Optimized CNN-LSTM")
+    print(f"+ Using Hybrid-Optimized CNN-LSTM")
     print_system_usage(device)
 
     # Setup output directory
     output_dir = os.path.join(project_root, "05_OUTPUT_GENERATED")
     os.makedirs(output_dir, exist_ok=True)
     
-    model_name = "hybrid_cpu_gpu_sasl_model.pth"
+    model_name = "hybrid_sasl_model.pth"
     model_path = os.path.join(output_dir, model_name)
     best_model_path = os.path.join(output_dir, f"best_{model_name}")
 
@@ -482,11 +501,14 @@ def main():
     # Mixed precision for GPU
     scaler = torch.cuda.amp.GradScaler() if USE_MIXED_PRECISION else None
     
-    print(f"🚀 Starting Hybrid CPU+GPU Training")
+    print(f">> Starting Hybrid CPU+GPU Training")
     print(f"   Mixed Precision: {USE_MIXED_PRECISION}")
     print(f"   CPU Workers: {hybrid_system.cpu_workers}")
     
-    num_epochs = 15
+    # Use provided epochs or default
+    num_epochs = epochs_arg if epochs_arg is not None else 15
+    print(f"> Training for {num_epochs} epochs")
+    
     best_val_acc = 0.0
     start_time = time.time()
 
@@ -568,7 +590,7 @@ def main():
                 
                 scheduler.step(avg_val_loss)
                 
-                print(f"\n⚡ Hybrid Epoch [{epoch+1}/{num_epochs}] - Time: {epoch_time:.1f}s")
+                print(f"\n+ Hybrid Epoch [{epoch+1}/{num_epochs}] - Time: {epoch_time:.1f}s")
                 print(f"Train Loss: {avg_train_loss:.4f}, Train Acc: {train_acc:.4f}")
                 print(f"Val Loss: {avg_val_loss:.4f}, Val Acc: {val_acc:.4f}")
                 print_system_usage(device)
@@ -578,17 +600,17 @@ def main():
                 if val_acc > best_val_acc:
                     best_val_acc = val_acc
                     torch.save(model.state_dict(), best_model_path)
-                    print(f"🏆 New best hybrid model saved: {best_val_acc:.4f}")
+                    print(f"* New best hybrid model saved: {best_val_acc:.4f}")
             else:
                 scheduler.step(avg_train_loss)
-                print(f"\n⚡ Hybrid Epoch [{epoch+1}/{num_epochs}] - Time: {epoch_time:.1f}s")
+                print(f"\n+ Hybrid Epoch [{epoch+1}/{num_epochs}] - Time: {epoch_time:.1f}s")
                 print(f"Train Loss: {avg_train_loss:.4f}, Train Acc: {train_acc:.4f}")
                 print_system_usage(device)
                 print("-" * 60)
     
     finally:
         # Cleanup
-        print("🧹 Cleaning up hybrid system...")
+        print("~ Cleaning up hybrid system...")
         train_dataset.cleanup()
         if test_dataset:
             test_dataset.cleanup()
@@ -597,14 +619,20 @@ def main():
     torch.save(model.state_dict(), model_path)
     total_time = time.time() - start_time
     
-    print(f"\n🎉 Hybrid CPU+GPU Training completed in {total_time/60:.1f} minutes!")
+    print(f"\n+ Hybrid CPU+GPU Training completed in {total_time/60:.1f} minutes!")
     print(f"Final model saved to {model_path}")
     
     if ENABLE_VALIDATION and test_loader is not None:
-        print(f"🏆 Best validation accuracy: {best_val_acc:.4f}")
+        print(f"* Best validation accuracy: {best_val_acc:.4f}")
     
     print(f"Hybrid training used {len(hybrid_system.cpu_augmentations)} CPU augmentation strategies")
     print(f"Final training dataset size: {len(train_dataset)} samples")
 
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser(description='Hybrid CPU+GPU SASL Training')
+    parser.add_argument('--batch_size', type=int, default=None, help='Batch size for training')
+    parser.add_argument('--epochs', type=int, default=None, help='Number of epochs to train')
+    
+    args = parser.parse_args()
+    
+    main(batch_size_arg=args.batch_size, epochs_arg=args.epochs)
