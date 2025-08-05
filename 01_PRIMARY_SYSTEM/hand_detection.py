@@ -1,8 +1,17 @@
+# Suppress MediaPipe verbose logging (must be before any imports)
+import os
+os.environ['GLOG_minloglevel'] = '2'  # Suppress MediaPipe warnings
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TensorFlow warnings
+
 import cv2
 import mediapipe as mp
 import numpy as np
 from typing import List, Tuple, Optional
 import math
+
+# Suppress MediaPipe specific warnings
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="mediapipe")
 
 class HandDetector:
     """
@@ -76,8 +85,10 @@ class HandDetector:
         # Calculate bounding box with padding
         bbox = self._calculate_bbox(x_coords, y_coords, w, h)
         
-        # Get hand label (Left/Right)
+        # Get hand label (Left/Right) - Switch from camera perspective to person's actual perspective
         hand_label = handedness.classification[0].label
+        # Switch the perspective: camera's "Left" is person's "Right" and vice versa
+        hand_label = "Right" if hand_label == "Left" else "Left"
         confidence = handedness.classification[0].score
         
         return {

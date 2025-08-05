@@ -1,6 +1,13 @@
 # Suppress MediaPipe verbose logging (must be before any imports)
 import os
+import sys
 os.environ['GLOG_minloglevel'] = '2'  # Suppress MediaPipe warnings
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TensorFlow warnings
+os.environ['MEDIAPIPE_DISABLE_GPU'] = '1'  # Optional: Disable GPU to reduce warnings
+
+# Suppress MediaPipe specific warnings
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="mediapipe")
 
 import torch
 import cv2
@@ -34,9 +41,15 @@ with open(config_path, "r") as f:
 
 # Load trained model - try hand-focused CNN+LSTM first
 try:
-    # Import from hand_focused_CNN_LSTM instead of hand_focused_model
+    # Import from hand_focused_CNN_LSTM in the same directory
     import importlib.util
-    spec = importlib.util.spec_from_file_location("hand_focused_CNN_LSTM", "hand_focused_CNN_LSTM.py")
+    import os
+    
+    # Get the current script directory
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    hand_focused_path = os.path.join(current_dir, "hand_focused_CNN_LSTM.py")
+    
+    spec = importlib.util.spec_from_file_location("hand_focused_CNN_LSTM", hand_focused_path)
     hand_focused_module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(hand_focused_module)
     
@@ -44,17 +57,26 @@ try:
     cnn_base = hand_focused_module.cnn_base
     MODEL_TYPE = "hand_focused"
     print("Using Hand-Focused CNN-LSTM model")
-except (ImportError, AttributeError) as e:
-    # Fallback to standard model
-    from model import CNN_LSTM, cnn_base
-    MODEL_TYPE = "standard"
-    print("Using Standard CNN-LSTM model")
-    MODEL_TYPE = "hand_focused"
-    print("Using Hand-Focused CNN-LSTM model")
-except ImportError:
-    from model import CNN_LSTM, cnn_base
-    MODEL_TYPE = "standard"
-    print("Using Standard CNN-LSTM model")
+except (ImportError, AttributeError, FileNotFoundError) as e:
+    # Fallback to standard model in the fallback directory
+    print(f"Hand-focused model not available ({e}), using fallback model")
+    try:
+        # Try to import from fallback directory
+        fallback_dir = os.path.join(os.path.dirname(current_dir), "02_FALLBACK_COMPATIBILITY")
+        model_path = os.path.join(fallback_dir, "model.py")
+        
+        spec = importlib.util.spec_from_file_location("model", model_path)
+        model_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(model_module)
+        
+        CNN_LSTM = model_module.CNN_LSTM
+        cnn_base = model_module.cnn_base
+        MODEL_TYPE = "standard"
+        print("Using standard CNN-LSTM model")
+    except Exception as fallback_error:
+        print(f"Error loading fallback model: {fallback_error}")
+        print("Please ensure the model files are available")
+        sys.exit(1)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -88,7 +110,23 @@ if MODEL_TYPE == "hand_focused":
     
     if not model_loaded:
         print("Hand-focused model not found, using standard model")
-        model = CNN_LSTM(cnn=cnn_base, num_classes=len(class_names)).to(device)
+        # We need to import CNN_LSTM if we're falling back
+        try:
+            # Import from fallback directory
+            fallback_dir = os.path.join(os.path.dirname(current_dir), "02_FALLBACK_COMPATIBILITY")
+            model_path_fallback = os.path.join(fallback_dir, "model.py")
+            
+            spec = importlib.util.spec_from_file_location("model", model_path_fallback)
+            model_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(model_module)
+            
+            CNN_LSTM = model_module.CNN_LSTM
+            model = CNN_LSTM(cnn=cnn_base, num_classes=len(class_names)).to(device)
+            MODEL_TYPE = "standard"
+        except Exception as e:
+            print(f"Error loading standard model class: {e}")
+            print("!!! Could not load any model! Please check your installation.")
+            sys.exit(1)
         
         # Try to load standard model
         standard_model_paths = [
@@ -105,12 +143,27 @@ if MODEL_TYPE == "hand_focused":
             except FileNotFoundError:
                 continue
         else:
-            print("⚠️ No trained model found! Please train a model first.")
+            print("!!! No trained model found! Please train a model first.")
             print("Run: python main.py -> Option 1 to train a model")
             sys.exit(1)
 else:
-    model = CNN_LSTM(cnn=cnn_base, num_classes=len(class_names)).to(device)
-    model.load_state_dict(torch.load("sasl_model.pth", map_location=device))
+    # Standard model - need to import CNN_LSTM
+    try:
+        # Import from fallback directory
+        fallback_dir = os.path.join(os.path.dirname(current_dir), "02_FALLBACK_COMPATIBILITY")
+        model_path_fallback = os.path.join(fallback_dir, "model.py")
+        
+        spec = importlib.util.spec_from_file_location("model", model_path_fallback)
+        model_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(model_module)
+        
+        CNN_LSTM = model_module.CNN_LSTM
+        model = CNN_LSTM(cnn=cnn_base, num_classes=len(class_names)).to(device)
+        model.load_state_dict(torch.load("sasl_model.pth", map_location=device))
+    except Exception as e:
+        print(f"Error loading standard model: {e}")
+        print("!!! Could not load standard model! Please check your installation.")
+        sys.exit(1)
 
 model.eval()
 

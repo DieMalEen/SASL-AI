@@ -1,0 +1,83 @@
+# SASL Hand Detection System - Complete Requirements
+# Install with: pip install -r requirements.txt
+
+# ===== CORE DEPENDENCIES =====
+# Essential PyTorch components for deep learning
+torch>=1.9.0
+torchvision>=0.10.0
+torchaudio>=0.9.0
+
+# Computer Vision and Image Processing
+opencv-python>=4.5.0
+Pillow>=8.3.0
+numpy>=1.21.0
+
+# Hand Detection and Tracking (Core Feature)
+mediapipe>=0.8.0
+
+# Machine Learning Utilities
+scikit-learn>=1.0.0
+
+# ===== TRAINING ENHANCEMENTS =====
+# Progress bars and training monitoring
+tqdm>=4.62.0
+
+# Data visualization for training analysis
+matplotlib>=3.4.0
+seaborn>=0.11.0
+
+# Configuration and logging
+pyyaml>=5.4.0
+
+# ===== GPU OPTIMIZATION =====
+# CUDA support (automatically installed with torch if CUDA available)
+# These are handled automatically by PyTorch installation
+
+# ===== OPTIONAL PERFORMANCE ENHANCEMENTS =====
+# Fast image transformations
+albumentations>=1.1.0
+
+# Memory profiling and optimization
+psutil>=5.8.0
+
+# JSON handling improvements
+ujson>=4.0.0
+
+# ===== DEVELOPMENT AND DEBUGGING =====
+# Interactive development
+jupyter>=1.0.0
+ipywidgets>=7.6.0
+
+# Code formatting and quality
+black>=21.0.0
+flake8>=3.9.0
+
+# ===== SYSTEM COMPATIBILITY =====
+# Ensure compatibility across different systems
+setuptools>=57.0.0
+wheel>=0.36.0
+
+# ===== INSTALLATION NOTES =====
+# 
+# For GPU Training (NVIDIA users):
+# 1. Install CUDA drivers from NVIDIA
+# 2. Verify with: python -c "import torch; print(torch.cuda.is_available())"
+# 
+# For CPU-only systems:
+# Install with: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+# 
+# Quick installation:
+# pip install -r requirements.txt
+# 
+# Minimal installation (core only):
+# pip install torch torchvision opencv-python mediapipe numpy scikit-learn
+# 
+# Test installation:
+# python main.py → Option 1 (Performance Benchmark)
+
+# ===== VERSION COMPATIBILITY =====
+# Tested with:
+# - Python 3.8-3.11
+# - Windows 10/11, macOS, Ubuntu 18.04+
+# - CUDA 11.0+ (for GPU training)
+# - GTX 1650+ or equivalent (for optimal GPU performance)

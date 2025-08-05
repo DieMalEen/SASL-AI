@@ -1,6 +1,11 @@
 # Suppress MediaPipe verbose logging (must be before any imports)
 import os
 os.environ['GLOG_minloglevel'] = '2'  # Suppress MediaPipe warnings
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TensorFlow warnings
+
+# Suppress MediaPipe specific warnings
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="mediapipe")
 
 import cv2
 import numpy as np
@@ -43,9 +48,18 @@ def demonstrate_hand_tracking(video_path, output_path=None, show_video=True):
     print(f"Video info: {width}x{height}, {fps} FPS, {total_frames} frames")
     
     # Setup video writer if output path is provided
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     if output_path:
+        # Try different codecs for better compatibility
+        fourcc = cv2.VideoWriter_fourcc(*'XVID')  # More compatible codec
         out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+        if not out.isOpened():
+            print(f"Warning: Could not initialize video writer with XVID codec")
+            print(f"Trying alternative codec...")
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+            if not out.isOpened():
+                print(f"Error: Could not initialize video writer. Video will not be saved.")
+                output_path = None  # Disable video saving
     
     frame_count = 0
     hands_detected_count = 0
@@ -176,8 +190,9 @@ def extract_hand_regions_demo(video_path, output_dir="hand_regions_demo"):
                 # Save hand region
                 filename = f"frame_{frame_count:04d}_hand_{i}_{hand_label}_{confidence:.2f}.jpg"
                 filepath = os.path.join(output_dir, filename)
-                cv2.imwrite(filepath, hand_region)
-                hand_regions_saved += 1
+                success = cv2.imwrite(filepath, hand_region)
+                if success:
+                    hand_regions_saved += 1
     
     cap.release()
     hand_detector.close()
@@ -255,13 +270,23 @@ def main():
         demonstrate_hand_tracking(sample_video, show_video=True)
     
     if choice in ['2', '4']:
-        output_video = f"hand_tracking_demo_{os.path.basename(sample_video)}"
+        # Create output directory using absolute path
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(script_dir)
+        output_dir = os.path.join(project_root, "05_OUTPUT_GENERATED")
+        os.makedirs(output_dir, exist_ok=True)
+        output_video = os.path.join(output_dir, f"hand_tracking_demo_{os.path.basename(sample_video)}")
         print(f"\nSaving hand tracking video to {output_video}...")
         demonstrate_hand_tracking(sample_video, output_path=output_video, show_video=False)
     
     if choice in ['3', '4']:
         print("\nExtracting hand regions...")
-        extract_hand_regions_demo(sample_video)
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(script_dir)
+        output_dir = os.path.join(project_root, "05_OUTPUT_GENERATED")
+        os.makedirs(output_dir, exist_ok=True)
+        hand_regions_dir = os.path.join(output_dir, "hand_regions_demo")
+        extract_hand_regions_demo(sample_video, output_dir=hand_regions_dir)
     
     print("\nDemo completed!")
 

@@ -1,3 +1,4 @@
+# GPU-Optimized SASL Training Script
 # Suppress MediaPipe verbose logging (must be before any imports)
 import os
 os.environ['GLOG_minloglevel'] = '2'  # Suppress MediaPipe warnings
@@ -17,192 +18,63 @@ from PIL import Image
 import cv2
 import numpy as np
 import json
+import time
 from hand_detection import HandDetector, extract_hand_focused_frames
 
-batch_size = 10
-
-# Training loop
-num_epochs = 15
-best_val_acc = 0.0
-
-
-# Legacy dataset classes (for fallback compatibility)
-class AdvancedSASLDataset(Dataset):
-    def __init__(self, videos, labels, base_transform, augment=False, augment_factor=10):
-        self.videos = videos
-        self.labels = labels
-        self.base_transform = base_transform
-        self.augment = augment
-        self.augment_factor = augment_factor
-        
-        # Standard augmentation strategies (for fallback)
-        self.augmentation_strategies = [
-            transforms.Compose([
-                transforms.Resize((256, 256)),
-                transforms.RandomResizedCrop(224, scale=(0.8, 1.0)),
-                transforms.RandomHorizontalFlip(p=0.5),
-                transforms.RandomRotation(degrees=10),
-                transforms.ToTensor(),
-                transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-            ]),
-            transforms.Compose([
-                transforms.Resize((224, 224)),
-                transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.1),
-                transforms.RandomAdjustSharpness(sharpness_factor=1.5, p=0.5),
-                transforms.ToTensor(),
-                transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-            ]),
-            transforms.Compose([
-                transforms.Resize((256, 256)),
-                transforms.RandomResizedCrop(224, scale=(0.7, 1.0)),
-                transforms.ColorJitter(brightness=0.2, contrast=0.2),
-                transforms.RandomHorizontalFlip(p=0.3),
-                transforms.ToTensor(),
-                transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-            ])
-        ]
-        
-        if self.augment:
-            self.expanded_videos = []
-            self.expanded_labels = []
-            self.augment_strategies = []
-            
-            for video, label in zip(videos, labels):
-                # Add original
-                self.expanded_videos.append(video)
-                self.expanded_labels.append(label)
-                self.augment_strategies.append(-1)  # -1 means no augmentation
-                
-                # Add augmented versions
-                for i in range(augment_factor - 1):
-                    self.expanded_videos.append(video)
-                    self.expanded_labels.append(label)
-                    self.augment_strategies.append(i % len(self.augmentation_strategies))
-        else:
-            self.expanded_videos = videos
-            self.expanded_labels = labels
-            self.augment_strategies = [-1] * len(videos)
-
-    def __len__(self):
-        return len(self.expanded_videos)
-
-    def __getitem__(self, idx):
-        video_path = self.expanded_videos[idx]
-        label = self.expanded_labels[idx]
-        strategy_idx = self.augment_strategies[idx]
-        
-        if strategy_idx == -1:
-            # Use base transform (no augmentation)
-            frames = self._preprocess_video_basic(video_path, self.base_transform)
-        else:
-            # Use specific augmentation strategy
-            frames = self._preprocess_video_with_strategy(video_path, strategy_idx)
-            
-        return frames, label
+# GPU Configuration and Optimization
+def setup_gpu_optimization():
+    """Configure optimal GPU settings for training"""
+    # Enable cuDNN optimization
+    torch.backends.cudnn.benchmark = True
+    torch.backends.cudnn.deterministic = False
     
-    def _preprocess_video_basic(self, video_path, transform, num_frames=16):
-        """Basic video preprocessing without hand detection"""
-        frames = extract_frames_original(video_path, num_frames)
-        return torch.stack([transform(frame) for frame in frames])
-    
-    def _preprocess_video_with_strategy(self, video_path, strategy_idx, num_frames=16):
-        """Preprocess video with specific augmentation strategy"""
-        frames = extract_frames_original(video_path, num_frames)
-        transform = self.augmentation_strategies[strategy_idx]
-        return torch.stack([transform(frame) for frame in frames])
-
-# Standard CNN-LSTM model (for fallback)
-class CNN_LSTM(nn.Module):
-    def __init__(self, cnn, hidden_size=256, num_classes=20, num_layers=1):
-        super(CNN_LSTM, self).__init__()
-        self.cnn = cnn
-        self.lstm = nn.LSTM(input_size=512, hidden_size=hidden_size,
-                            num_layers=num_layers, batch_first=True)
-        self.fc = nn.Linear(hidden_size, num_classes)
-
-    def forward(self, x):  # x: (batch, seq_len, C, H, W)
-        batch_size, seq_len, C, H, W = x.size()
-        x = x.view(batch_size * seq_len, C, H, W)  # Flatten batch and sequence for CNN
-        features = self.cnn(x)  # Extract features with CNN
-        features = features.view(batch_size, seq_len, -1)  # Reshape for LSTM
-        lstm_out, _ = self.lstm(features)  # Pass through LSTM
-        out = self.fc(lstm_out[:, -1, :])  # Use output from last time step
-        return out
-
-def extract_frames_with_hands(video_path, num_frames=16):
-    """Extract frames from video with hand detection focus"""
-    hand_detector = HandDetector(
-        static_image_mode=False,
-        max_num_hands=2,
-        min_detection_confidence=0.5,
-        min_tracking_confidence=0.3
-    )
-    
-    try:
-        hand_frames, full_frames = extract_hand_focused_frames(
-            video_path, hand_detector, num_frames
-        )
+    # Set memory allocation strategy
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        # Enable memory optimization
+        torch.cuda.set_per_process_memory_fraction(0.95)  # Use 95% of GPU memory
         
-        # Convert to PIL Images
-        pil_frames = []
-        for frame in hand_frames:
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            pil_frames.append(Image.fromarray(frame_rgb))
+        device = torch.device("cuda")
+        gpu_name = torch.cuda.get_device_name(0)
+        gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
         
-        hand_detector.close()
-        return pil_frames
+        print(f"🚀 GPU Acceleration Enabled!")
+        print(f"   GPU: {gpu_name}")
+        print(f"   Memory: {gpu_memory:.1f} GB")
+        print(f"   CUDA Version: {torch.version.cuda}")
+        print(f"   PyTorch Version: {torch.__version__}")
         
-    except Exception as e:
-        print(f"Hand detection failed for {video_path}: {e}")
-        hand_detector.close()
-        return extract_frames_original(video_path, num_frames)
-
-def extract_frames_original(video_path, num_frames=16):
-    """Original frame extraction method as fallback"""
-    cap = cv2.VideoCapture(video_path)
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    
-    if total_frames < num_frames:
-        frame_idxs = list(range(total_frames))
-        frame_idxs.extend([total_frames - 1] * (num_frames - total_frames))
+        return device
     else:
-        frame_idxs = np.linspace(0, total_frames - 1, num_frames, dtype=int)
-    
-    frames = []
-    for idx in frame_idxs:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-        ret, frame = cap.read()
-        if not ret:
-            if frames:
-                frame = cv2.cvtColor(np.array(frames[-1]), cv2.COLOR_RGB2BGR)
-            else:
-                frame = np.zeros((224, 224, 3), dtype=np.uint8)
+        print("⚠️  CUDA not available, falling back to CPU")
+        return torch.device("cpu")
+
+# Optimized batch sizes for your GTX 1650 (4GB VRAM)
+def get_optimal_batch_size(device):
+    """Get optimal batch size based on available GPU memory"""
+    if device.type == 'cuda':
+        gpu_memory_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
         
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        frame = Image.fromarray(frame)
-        frames.append(frame)
+        if gpu_memory_gb >= 8:
+            return 8  # High-end GPU
+        elif gpu_memory_gb >= 6:
+            return 6  # Mid-range GPU
+        elif gpu_memory_gb >= 4:
+            return 4  # Your GTX 1650
+        else:
+            return 2  # Low VRAM
+    else:
+        return 2  # CPU fallback
 
-    cap.release()
-    
-    while len(frames) < num_frames:
-        frames.append(frames[-1])
-    
-    return frames[:num_frames]
-
-def preprocess_video_with_hands(video_path, transform, num_frames=16):
-    """Enhanced video preprocessing with hand detection"""
-    frames = extract_frames_with_hands(video_path, num_frames)
-    return torch.stack([transform(frame) for frame in frames])
-
-# Enhanced transforms for hand-focused training
-hand_focused_transform = transforms.Compose([
+# Enhanced transforms optimized for GPU processing
+gpu_optimized_transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
     transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 ])
 
-# Enhanced augmentation strategies for hand-focused data with much more diversity
-hand_augmentation_strategies = [
+# GPU-optimized augmentation strategies
+gpu_augmentation_strategies = [
     transforms.Compose([
         transforms.Resize((256, 256)),
         transforms.RandomResizedCrop(224, scale=(0.8, 1.0)),
@@ -243,15 +115,80 @@ hand_augmentation_strategies = [
     ])
 ]
 
-def preprocess_video_with_hand_strategy(video_path, strategy_idx, num_frames=16):
-    """Preprocess video with specific hand-focused augmentation strategy"""
-    frames = extract_frames_with_hands(video_path, num_frames)
-    transform = hand_augmentation_strategies[strategy_idx]
+def extract_frames_with_hands_gpu_optimized(video_path, num_frames=16):
+    """GPU-optimized frame extraction with hand detection"""
+    hand_detector = HandDetector(
+        static_image_mode=False,
+        max_num_hands=2,
+        min_detection_confidence=0.5,
+        min_tracking_confidence=0.3
+    )
+    
+    try:
+        hand_frames, full_frames = extract_hand_focused_frames(
+            video_path, hand_detector, num_frames
+        )
+        
+        # Convert to PIL Images efficiently
+        pil_frames = []
+        for frame in hand_frames:
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            pil_frames.append(Image.fromarray(frame_rgb))
+        
+        hand_detector.close()
+        return pil_frames
+        
+    except Exception as e:
+        print(f"Hand detection failed for {video_path}: {e}")
+        hand_detector.close()
+        return extract_frames_original_gpu(video_path, num_frames)
+
+def extract_frames_original_gpu(video_path, num_frames=16):
+    """GPU-optimized original frame extraction method"""
+    cap = cv2.VideoCapture(video_path)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    
+    if total_frames < num_frames:
+        frame_idxs = list(range(total_frames))
+        frame_idxs.extend([total_frames - 1] * (num_frames - total_frames))
+    else:
+        frame_idxs = np.linspace(0, total_frames - 1, num_frames, dtype=int)
+    
+    frames = []
+    for idx in frame_idxs:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+        ret, frame = cap.read()
+        if not ret:
+            if frames:
+                frame = cv2.cvtColor(np.array(frames[-1]), cv2.COLOR_RGB2BGR)
+            else:
+                frame = np.zeros((224, 224, 3), dtype=np.uint8)
+        
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        frame = Image.fromarray(frame)
+        frames.append(frame)
+
+    cap.release()
+    
+    while len(frames) < num_frames:
+        frames.append(frames[-1])
+    
+    return frames[:num_frames]
+
+def preprocess_video_with_hands_gpu(video_path, transform, num_frames=16):
+    """GPU-optimized video preprocessing with hand detection"""
+    frames = extract_frames_with_hands_gpu_optimized(video_path, num_frames)
     return torch.stack([transform(frame) for frame in frames])
 
-class HandFocusedSASLDataset(Dataset):
-    """Enhanced dataset class that uses hand detection for better sign language recognition"""
-    def __init__(self, videos, labels, base_transform, augment=False, augment_factor=6):
+def preprocess_video_with_hand_strategy_gpu(video_path, strategy_idx, num_frames=16):
+    """GPU-optimized video preprocessing with specific augmentation strategy"""
+    frames = extract_frames_with_hands_gpu_optimized(video_path, num_frames)
+    transform = gpu_augmentation_strategies[strategy_idx]
+    return torch.stack([transform(frame) for frame in frames])
+
+class GPUOptimizedSASLDataset(Dataset):
+    """GPU-optimized dataset class for faster training"""
+    def __init__(self, videos, labels, base_transform, augment=False, augment_factor=8):
         self.videos = videos
         self.labels = labels
         self.base_transform = base_transform
@@ -273,7 +210,7 @@ class HandFocusedSASLDataset(Dataset):
                 for i in range(augment_factor - 1):
                     self.expanded_videos.append(video)
                     self.expanded_labels.append(label)
-                    self.augment_strategies.append(i % len(hand_augmentation_strategies))
+                    self.augment_strategies.append(i % len(gpu_augmentation_strategies))
         else:
             self.expanded_videos = videos
             self.expanded_labels = labels
@@ -289,21 +226,21 @@ class HandFocusedSASLDataset(Dataset):
         
         if strategy_idx == -1:
             # Use base transform with hand detection
-            frames = preprocess_video_with_hands(video_path, self.base_transform)
+            frames = preprocess_video_with_hands_gpu(video_path, self.base_transform)
         else:
-            # Use specific hand-focused augmentation strategy
-            frames = preprocess_video_with_hand_strategy(video_path, strategy_idx)
+            # Use specific GPU-optimized augmentation strategy
+            frames = preprocess_video_with_hand_strategy_gpu(video_path, strategy_idx)
             
         return frames, label
 
-# Enhanced CNN-LSTM model with attention mechanism for hand features
-class HandFocusedCNN_LSTM(nn.Module):
-    """Enhanced CNN-LSTM model with attention mechanism for better hand feature extraction"""
+# GPU-Optimized CNN-LSTM model
+class GPUOptimizedHandFocusedCNN_LSTM(nn.Module):
+    """GPU-optimized CNN-LSTM model with mixed precision support"""
     def __init__(self, cnn, hidden_size=256, num_classes=20, num_layers=2, dropout=0.3):
-        super(HandFocusedCNN_LSTM, self).__init__()
+        super(GPUOptimizedHandFocusedCNN_LSTM, self).__init__()
         self.cnn = cnn
         
-        # Enhanced LSTM with more layers and dropout
+        # Enhanced LSTM optimized for GPU
         self.lstm = nn.LSTM(
             input_size=512, 
             hidden_size=hidden_size,
@@ -313,7 +250,7 @@ class HandFocusedCNN_LSTM(nn.Module):
             bidirectional=True
         )
         
-        # Attention mechanism for focusing on important temporal features
+        # Optimized attention mechanism
         self.attention = nn.MultiheadAttention(
             embed_dim=hidden_size * 2,  # *2 for bidirectional
             num_heads=8,
@@ -321,13 +258,13 @@ class HandFocusedCNN_LSTM(nn.Module):
             batch_first=True
         )
         
-        # Enhanced classifier with dropout
+        # Enhanced classifier with GPU-optimized layers
         self.classifier = nn.Sequential(
             nn.Linear(hidden_size * 2, hidden_size),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),  # inplace=True for memory efficiency
             nn.Dropout(dropout),
             nn.Linear(hidden_size, hidden_size // 2),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
             nn.Dropout(dropout),
             nn.Linear(hidden_size // 2, num_classes)
         )
@@ -335,9 +272,10 @@ class HandFocusedCNN_LSTM(nn.Module):
     def forward(self, x):
         batch_size, seq_len, C, H, W = x.size()
         
-        # Extract CNN features
+        # Extract CNN features with memory optimization
         x = x.view(batch_size * seq_len, C, H, W)
-        features = self.cnn(x)
+        with torch.cuda.amp.autocast():  # Mixed precision
+            features = self.cnn(x)
         features = features.view(batch_size, seq_len, -1)
         
         # LSTM processing
@@ -354,14 +292,6 @@ class HandFocusedCNN_LSTM(nn.Module):
         # Final classification
         out = self.classifier(pooled_features)
         return out
-
-# Load and prepare CNN backbone
-cnn_base = models.resnet18(pretrained=True)
-cnn_base = nn.Sequential(*list(cnn_base.children())[:-1])
-for param in cnn_base.parameters():
-    param.requires_grad = False
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def load_dataset_from_folder(root_dir):
     """Load video paths and labels from dataset folders"""
@@ -380,14 +310,29 @@ def load_dataset_from_folder(root_dir):
 
     return video_paths, labels, class_names
 
+def print_gpu_memory_usage():
+    """Print current GPU memory usage"""
+    if torch.cuda.is_available():
+        allocated = torch.cuda.memory_allocated() / 1024**3
+        reserved = torch.cuda.memory_reserved() / 1024**3
+        print(f"   GPU Memory - Allocated: {allocated:.2f}GB, Reserved: {reserved:.2f}GB")
+
 def main():
-    """Main training function - FIXED for Windows multiprocessing"""
+    """GPU-optimized main training function"""
+    # Setup GPU optimization
+    device = setup_gpu_optimization()
+    
     # Configuration
     ENABLE_VALIDATION = True
     USE_HAND_DETECTION = True
+    USE_MIXED_PRECISION = True  # For faster training on modern GPUs
     
-    print("Loading dataset with hand detection support...")
-    # Try different dataset paths depending on where script is run from
+    # Get optimal batch size for your GPU
+    batch_size = get_optimal_batch_size(device)
+    print(f"🎯 Optimized batch size for your GPU: {batch_size}")
+    
+    print("\n📊 Loading dataset with GPU-optimized hand detection...")
+    # Try different dataset paths
     dataset_paths = ["../dataset", "dataset", "./dataset"]
     root_dir = None
     
@@ -469,30 +414,32 @@ def main():
                 video_paths, labels, test_size=0.2, random_state=42, stratify=labels
             )
     
-    # Create datasets
-    if USE_HAND_DETECTION:
-        print("Creating hand-focused datasets...")
-        train_dataset = HandFocusedSASLDataset(
-            train_paths, train_labels, hand_focused_transform, 
-            augment=True, augment_factor=10
-        )
-        test_dataset = HandFocusedSASLDataset(
-            test_paths, test_labels, hand_focused_transform, 
-            augment=False
-        ) if test_paths else None
-    else:
-        train_dataset = AdvancedSASLDataset(
-            train_paths, train_labels, hand_focused_transform, 
-            augment=True, augment_factor=8
-        )
-        test_dataset = AdvancedSASLDataset(
-            test_paths, test_labels, hand_focused_transform, 
-            augment=False
-        ) if test_paths else None
+    # Create GPU-optimized datasets
+    print("Creating GPU-optimized datasets...")
+    train_dataset = GPUOptimizedSASLDataset(
+        train_paths, train_labels, gpu_optimized_transform, 
+        augment=True, augment_factor=8  # Reduced for GPU memory efficiency
+    )
+    test_dataset = GPUOptimizedSASLDataset(
+        test_paths, test_labels, gpu_optimized_transform, 
+        augment=False
+    ) if test_paths else None
     
-    # Create data loaders - FIXED: num_workers=0 for Windows
-    train_loader = DataLoader(train_dataset, batch_size, shuffle=True, num_workers=0)
-    test_loader = DataLoader(test_dataset, batch_size, shuffle=False, num_workers=0) if test_dataset else None
+    # Create data loaders with GPU optimization
+    # Use more workers for GPU training (but 0 for Windows compatibility)
+    num_workers = 0 if os.name == 'nt' else 4
+    pin_memory = device.type == 'cuda'
+    
+    train_loader = DataLoader(
+        train_dataset, batch_size, shuffle=True, 
+        num_workers=num_workers, pin_memory=pin_memory,
+        persistent_workers=False  # For Windows compatibility
+    )
+    test_loader = DataLoader(
+        test_dataset, batch_size, shuffle=False, 
+        num_workers=num_workers, pin_memory=pin_memory,
+        persistent_workers=False
+    ) if test_dataset else None
     
     print(f"Training videos: {len(train_paths)}")
     print(f"Training dataset size with augmentation: {len(train_dataset)}")
@@ -501,54 +448,83 @@ def main():
     else:
         print("!!!  No test data available - training without validation")
 
-    # Initialize model
-    if USE_HAND_DETECTION:
-        model = HandFocusedCNN_LSTM(
-            cnn=cnn_base, 
-            num_classes=len(class_names),
-            hidden_size=256,
-            num_layers=2,
-            dropout=0.3
-        ).to(device)
-        model_name = "hand_focused_sasl_model.pth"
-    else:
-        model = CNN_LSTM(cnn=cnn_base, num_classes=len(class_names)).to(device)
-        model_name = "sasl_model.pth"
+    # Initialize GPU-optimized model
+    cnn_base = models.resnet18(pretrained=True)
+    cnn_base = nn.Sequential(*list(cnn_base.children())[:-1])
+    
+    # Fine-tune some CNN layers for better performance
+    for param in cnn_base.parameters():
+        param.requires_grad = False
+    
+    # Unfreeze last few layers for fine-tuning
+    for param in cnn_base[-2:].parameters():
+        param.requires_grad = True
 
-    print(f"Using model: {'Hand-Focused CNN-LSTM' if USE_HAND_DETECTION else 'Standard CNN-LSTM'}")
+    model = GPUOptimizedHandFocusedCNN_LSTM(
+        cnn=cnn_base, 
+        num_classes=len(class_names),
+        hidden_size=256,
+        num_layers=2,
+        dropout=0.3
+    ).to(device)
 
-    # Setup output directory for models using absolute path
+    print(f"🧠 Using GPU-Optimized Hand-Focused CNN-LSTM")
+    print_gpu_memory_usage()
+
+    # Setup output directory using absolute path
     script_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(script_dir)
     output_dir = os.path.join(project_root, "05_OUTPUT_GENERATED")
     os.makedirs(output_dir, exist_ok=True)
     
-    # Update model paths to save in output directory
+    model_name = "gpu_optimized_hand_focused_sasl_model.pth"
     model_path = os.path.join(output_dir, model_name)
     best_model_path = os.path.join(output_dir, f"best_{model_name}")
 
-    # Training setup
-    criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-5)
+    # GPU-optimized training setup
+    criterion = nn.CrossEntropyLoss().to(device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=2e-4, weight_decay=1e-5)  # Slightly higher LR for GPU
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='min', factor=0.5, patience=3
     )
+    
+    # Mixed precision scaler for faster training
+    scaler = torch.cuda.amp.GradScaler() if USE_MIXED_PRECISION and device.type == 'cuda' else None
+    
+    print(f"🚀 Starting GPU-accelerated training with mixed precision: {USE_MIXED_PRECISION and device.type == 'cuda'}")
+    
+    num_epochs = 15
+    best_val_acc = 0.0
+    start_time = time.time()
 
     for epoch in range(num_epochs):
-        # Training phase
+        # Training phase with GPU optimization
         model.train()
         total_loss = 0
         train_correct = 0
         train_total = 0
+        epoch_start = time.time()
         
         for batch_idx, (frames, labels_batch) in enumerate(train_loader):
-            frames, labels_batch = frames.to(device), labels_batch.to(device)
+            frames, labels_batch = frames.to(device, non_blocking=True), labels_batch.to(device, non_blocking=True)
             
             optimizer.zero_grad()
-            outputs = model(frames)
-            loss = criterion(outputs, labels_batch)
-            loss.backward()
-            optimizer.step()
+            
+            if scaler is not None:
+                # Mixed precision training
+                with torch.cuda.amp.autocast():
+                    outputs = model(frames)
+                    loss = criterion(outputs, labels_batch)
+                
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                # Standard training
+                outputs = model(frames)
+                loss = criterion(outputs, labels_batch)
+                loss.backward()
+                optimizer.step()
             
             total_loss += loss.item()
             _, predicted = torch.max(outputs, 1)
@@ -556,10 +532,14 @@ def main():
             train_total += labels_batch.size(0)
             
             if batch_idx % 10 == 0:
-                print(f"Epoch {epoch+1}/{num_epochs}, Batch {batch_idx}, Loss: {loss.item():.4f}")
+                batch_time = time.time() - epoch_start
+                print(f"Epoch {epoch+1}/{num_epochs}, Batch {batch_idx}, Loss: {loss.item():.4f}, Time: {batch_time:.1f}s")
+                if batch_idx % 50 == 0:  # Print GPU usage every 50 batches
+                    print_gpu_memory_usage()
 
         avg_train_loss = total_loss / len(train_loader)
         train_acc = train_correct / train_total
+        epoch_time = time.time() - epoch_start
         
         # Validation phase
         if ENABLE_VALIDATION and test_loader is not None:
@@ -570,9 +550,16 @@ def main():
             
             with torch.no_grad():
                 for frames, labels_batch in test_loader:
-                    frames, labels_batch = frames.to(device), labels_batch.to(device)
-                    outputs = model(frames)
-                    loss = criterion(outputs, labels_batch)
+                    frames, labels_batch = frames.to(device, non_blocking=True), labels_batch.to(device, non_blocking=True)
+                    
+                    if scaler is not None:
+                        with torch.cuda.amp.autocast():
+                            outputs = model(frames)
+                            loss = criterion(outputs, labels_batch)
+                    else:
+                        outputs = model(frames)
+                        loss = criterion(outputs, labels_batch)
+                    
                     val_loss += loss.item()
                     _, predicted = torch.max(outputs, 1)
                     val_correct += (predicted == labels_batch).sum().item()
@@ -583,44 +570,49 @@ def main():
             
             scheduler.step(avg_val_loss)
             
-            print(f"Epoch [{epoch+1}/{num_epochs}]")
+            print(f"\n⚡ GPU Epoch [{epoch+1}/{num_epochs}] - Time: {epoch_time:.1f}s")
             print(f"Train Loss: {avg_train_loss:.4f}, Train Acc: {train_acc:.4f}")
             print(f"Val Loss: {avg_val_loss:.4f}, Val Acc: {val_acc:.4f}")
-            print("-" * 50)
+            print_gpu_memory_usage()
+            print("-" * 60)
             
             # Save best model
             if val_acc > best_val_acc:
                 best_val_acc = val_acc
                 torch.save(model.state_dict(), best_model_path)
-                print(f"✓ New best model saved with validation accuracy: {best_val_acc:.4f}")
+                print(f"🏆 New best GPU model saved with validation accuracy: {best_val_acc:.4f}")
         else:
             # Training without validation
             scheduler.step(avg_train_loss)
             
-            print(f"Epoch [{epoch+1}/{num_epochs}]")
+            print(f"\n⚡ GPU Epoch [{epoch+1}/{num_epochs}] - Time: {epoch_time:.1f}s")
             print(f"Train Loss: {avg_train_loss:.4f}, Train Acc: {train_acc:.4f}")
             print("(No validation - single video per class)")
-            print("-" * 50)
+            print_gpu_memory_usage()
+            print("-" * 60)
             
             # Save checkpoint every 5 epochs
             if epoch % 5 == 0 or epoch == num_epochs - 1:
-                checkpoint_path = os.path.join(output_dir, f"epoch_{epoch+1}_{model_name}")
+                checkpoint_path = os.path.join(output_dir, f"gpu_epoch_{epoch+1}_{model_name}")
                 torch.save(model.state_dict(), checkpoint_path)
-                print(f"Model checkpoint saved at epoch {epoch+1}")
+                print(f"🔄 GPU model checkpoint saved at epoch {epoch+1}")
 
     # Save final model
     torch.save(model.state_dict(), model_path)
-    print(f"\nTraining completed successfully!")
+    total_time = time.time() - start_time
+    
+    print(f"\n🎉 GPU Training completed successfully in {total_time/60:.1f} minutes!")
     print(f"Final model saved to {model_path}")
     
     if ENABLE_VALIDATION and test_loader is not None:
-        print(f"Best validation accuracy achieved: {best_val_acc:.4f}")
+        print(f"🏆 Best validation accuracy achieved: {best_val_acc:.4f}")
     else:
         print("Training completed without validation (single video per class)")
         print("Consider adding more videos per class for better model evaluation")
     
-    print(f"Training used {len(hand_augmentation_strategies)} different augmentation strategies")
+    print(f"GPU training used {len(gpu_augmentation_strategies)} different augmentation strategies")
     print(f"Final training dataset size: {len(train_dataset)} samples")
+    print_gpu_memory_usage()
 
 if __name__ == '__main__':
     main()

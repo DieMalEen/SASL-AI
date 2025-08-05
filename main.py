@@ -32,14 +32,123 @@ class SASLLauncher:
         print("\nSASL Hand Detection System")
         print("=" * 50)
         print("Choose an option:")
-        print("1. Train Hand-Focused CNN+LSTM Model (RECOMMENDED)")
-        print("2. Real-Time Recognition with Hand Tracking") 
-        print("3. Video Analysis & Hand Tracking Demo")
-        print("4. System Information")
+        print("1. Performance Benchmark (Recommended First)")
+        print("2. Train Hand-Focused CNN+LSTM Model")
+        print("3. Real-Time Recognition with Hand Tracking") 
+        print("4. Video Analysis & Hand Tracking Demo")
+        print("5. System Information")
         print("q. Quit")
         print()
     
-    def run_script(self, script_name, description):
+    def show_training_menu(self):
+        """Display training options menu"""
+        print("\nTraining Options")
+        print("=" * 30)
+        print("Choose training method:")
+        print("1. GPU Training (Fastest - Recommended)")
+        print("2. CPU Training (Slower but Compatible)")
+        print("3. Hybrid CPU+GPU Training (Balanced)")
+        print("4. Back to Main Menu")
+        print()
+    
+    def run_benchmark(self):
+        """Run performance benchmark to help users choose training method"""
+        print("\nPerformance Benchmark")
+        print("=" * 50)
+        print("This will test your system to recommend the best training method...")
+        print("The benchmark takes about 1-2 minutes to complete.")
+        
+        confirm = input("\nRun benchmark? (y/n): ").strip().lower()
+        if confirm not in ['y', 'yes']:
+            return
+        
+        script_path = os.path.join(self.base_dir, 'simple_gpu_benchmark.py')
+        
+        try:
+            subprocess.run([sys.executable, script_path], check=True)
+            print("\n" + "="*60)
+            print("RECOMMENDATIONS BASED ON BENCHMARK:")
+            print("="*60)
+            
+            # Try to read the benchmark results to provide recommendations
+            results_path = os.path.join(self.base_dir, "05_OUTPUT_GENERATED", "simple_benchmark_results.json")
+            
+            if os.path.exists(results_path):
+                try:
+                    import json
+                    with open(results_path, 'r') as f:
+                        data = json.load(f)
+                    
+                    results = data.get('results', [])
+                    gpu_available = data.get('system_info', {}).get('cuda_available', False)
+                    
+                    if gpu_available and len(results) >= 2:
+                        cpu_result = next((r for r in results if r['device'] == 'cpu'), None)
+                        gpu_result = next((r for r in results if r['device'] == 'cuda'), None)
+                        
+                        if cpu_result and gpu_result:
+                            speedup = cpu_result['avg_time_per_iteration'] / gpu_result['avg_time_per_iteration']
+                            
+                            if speedup > 5.0:
+                                print("🚀 HIGHLY RECOMMENDED: GPU Training")
+                                print(f"   Your GPU is {speedup:.1f}x faster than CPU!")
+                                print("   Use Option 1 (GPU Training) for best performance")
+                            elif speedup > 2.0:
+                                print("✅ RECOMMENDED: GPU Training")  
+                                print(f"   Your GPU is {speedup:.1f}x faster than CPU")
+                                print("   Use Option 1 (GPU Training)")
+                            else:
+                                print("💡 SUGGESTED: Hybrid Training")
+                                print("   Moderate GPU speedup - try Option 3 (Hybrid)")
+                        else:
+                            print("📊 Use CPU Training (Option 2)")
+                    else:
+                        print("📊 No GPU detected - Use CPU Training (Option 2)")
+                        
+                except Exception as e:
+                    print(f"Could not read benchmark results: {e}")
+                    print("📊 Check the benchmark output above for recommendations")
+            else:
+                print("📊 Check the benchmark output above for recommendations")
+                
+        except FileNotFoundError:
+            print(f"Error: Could not find benchmark script at {script_path}")
+        except subprocess.CalledProcessError:
+            print("Benchmark failed. You can still proceed with training.")
+        except KeyboardInterrupt:
+            print("\nBenchmark interrupted by user.")
+    
+    def run_training_with_method(self, method):
+        """Run training with specified method"""
+        training_scripts = {
+            'gpu': 'gpu_optimized_training.py',
+            'cpu': 'hand_focused_CNN_LSTM.py', 
+            'hybrid': 'hybrid_cpu_gpu_training.py'
+        }
+        
+        descriptions = {
+            'gpu': 'GPU-Optimized Training (Fastest)',
+            'cpu': 'CPU Training (Original Method)',
+            'hybrid': 'Hybrid CPU+GPU Training (Balanced)'
+        }
+        
+        script_name = training_scripts.get(method)
+        description = descriptions.get(method)
+        
+        if script_name:
+            print(f"\n{description}")
+            print("=" * 60)
+            print("Training will begin shortly...")
+            print("You can stop training at any time with Ctrl+C")
+            print("The model will be saved automatically during training.")
+            
+            confirm = input(f"\nStart {description}? (y/n): ").strip().lower()
+            if confirm in ['y', 'yes']:
+                self.run_script(script_name, description)
+            else:
+                print("Training cancelled.")
+        else:
+            print("Invalid training method selected.")
         """Run a script from the PRIMARY_SYSTEM"""
         script_path = os.path.join(self.base_dir, '01_PRIMARY_SYSTEM', script_name)
         print(f"\n{description}")
@@ -57,7 +166,7 @@ class SASLLauncher:
     
     def show_system_info(self):
         """Show system information and file structure"""
-        print("\n📁 SASL System Information")
+        print("\nSASL System Information")
         print("=" * 50)
         
         # Check directory structure
@@ -71,7 +180,7 @@ class SASLLauncher:
         
         for desc, dir_name in directories:
             dir_path = os.path.join(self.base_dir, dir_name)
-            status = "Y" if os.path.exists(dir_path) else "N"
+            status = "✓" if os.path.exists(dir_path) else "✗"
             print(f"{status} {desc}: {dir_name}")
             
             if os.path.exists(dir_path):
@@ -83,23 +192,41 @@ class SASLLauncher:
                         print(f"    ... and {len(files) - 3} more files")
         
         # Check key files
-        print(f"\nDataset: {'Y' if os.path.exists('dataset') else 'N'}")
+        print(f"\nDataset: {'✓' if os.path.exists('dataset') else '✗'}")
+        
+        # Check GPU availability
+        try:
+            import torch
+            print(f"PyTorch: ✓ (v{torch.__version__})")
+            if torch.cuda.is_available():
+                gpu_name = torch.cuda.get_device_name(0)
+                gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
+                print(f"GPU: ✓ {gpu_name} ({gpu_memory:.1f}GB)")
+                print("   Recommended: GPU Training")
+            else:
+                print("GPU: ✗ (CUDA not available)")
+                print("   Recommended: CPU Training")
+        except ImportError:
+            print("PyTorch: ✗ (Not installed)")
         
         # Check dependencies
         try:
-            import torch, cv2, mediapipe
-            print("Key dependencies installed")
+            import cv2, mediapipe
+            print("OpenCV & MediaPipe: ✓")
         except ImportError as e:
             print(f"Missing dependencies: {e}")
     
     def show_manual_fallback(self):
         """Show manual commands if interactive guide fails"""
-        print("\n🔧 Manual Commands:")
+        print("\nManual Commands:")
         print("=" * 30)
-        print("Training: python 01_PRIMARY_SYSTEM/hand_focused_CNN_LSTM.py")
+        print("GPU Training: python 01_PRIMARY_SYSTEM/gpu_optimized_training.py")
+        print("CPU Training: python 01_PRIMARY_SYSTEM/hand_focused_CNN_LSTM.py")
+        print("Hybrid Training: python 01_PRIMARY_SYSTEM/hybrid_cpu_gpu_training.py")
         print("Camera: python 01_PRIMARY_SYSTEM/enhanced_camera.py")
+        print("GPU Camera: python 01_PRIMARY_SYSTEM/gpu_optimized_camera.py")
         print("Demo: python 01_PRIMARY_SYSTEM/hand_tracking_demo.py")
-        print("Basic Camera: python 02_FALLBACK_COMPATIBILITY/camera.py")
+        print("Benchmark: python simple_gpu_benchmark.py")
     
     def run(self):
         """Main run loop"""
@@ -109,15 +236,47 @@ class SASLLauncher:
                 choice = input("Enter your choice: ").strip().lower()
                 
                 if choice == '1':
-                    self.run_script('hand_focused_CNN_LSTM.py', 'Training Hand-Focused CNN+LSTM Model')
+                    self.run_benchmark()
                 
                 elif choice == '2':
-                    self.run_script('enhanced_camera.py', 'Real-Time Recognition with Hand Tracking')
+                    # Training submenu
+                    while True:
+                        self.show_training_menu()
+                        train_choice = input("Enter your choice: ").strip()
+                        
+                        if train_choice == '1':
+                            self.run_training_with_method('gpu')
+                            break
+                        elif train_choice == '2':
+                            self.run_training_with_method('cpu')
+                            break
+                        elif train_choice == '3':
+                            self.run_training_with_method('hybrid')
+                            break
+                        elif train_choice == '4':
+                            break  # Back to main menu
+                        else:
+                            print("Invalid choice. Please try again.")
                 
                 elif choice == '3':
-                    self.run_script('hand_tracking_demo.py', 'Video Analysis & Hand Tracking Demo')
+                    # Enhanced camera menu
+                    print("\nCamera Options")
+                    print("=" * 30)
+                    print("1. Standard Camera (CPU)")
+                    print("2. GPU-Optimized Camera (Faster)")
+                    camera_choice = input("Choose camera type (1/2): ").strip()
+                    
+                    if camera_choice == '1':
+                        self.run_script('enhanced_camera.py', 'Real-Time Recognition with Hand Tracking')
+                    elif camera_choice == '2':
+                        self.run_script('gpu_optimized_camera.py', 'GPU-Optimized Real-Time Recognition')
+                    else:
+                        print("Invalid choice.")
                 
                 elif choice == '4':
+                    self.run_script('hand_tracking_demo.py', 'Video Analysis & Hand Tracking Demo')
+                
+                elif choice == '5':
                     self.show_system_info()
                 
                 elif choice in ['q', 'quit', 'exit']:
@@ -127,7 +286,7 @@ class SASLLauncher:
                 else:
                     print("Invalid choice. Please try again.")
                 
-                if choice not in ['4']:  # Don't pause for info screens
+                if choice not in ['5']:  # Don't pause for info screens
                     input("\nPress Enter to continue...")
                     
             except KeyboardInterrupt:
@@ -135,6 +294,7 @@ class SASLLauncher:
                 break
             except Exception as e:
                 print(f"\nUnexpected error: {e}")
+                self.show_manual_fallback()
                 input("Press Enter to continue...")
 
 def main():
