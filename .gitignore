@@ -1,0 +1,43 @@
+# Dataset (videos can be large)
+/dataset
+
+# Model files (can be large)
+*.pth
+*.pkl
+*.h5
+
+# Hand detection demo outputs
+hand_tracking_demo_*.mp4
+hand_regions_demo/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
