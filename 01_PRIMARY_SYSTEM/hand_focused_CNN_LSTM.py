@@ -383,7 +383,7 @@ def load_dataset_from_folder(root_dir):
 
 def main(batch_size_arg=None, epochs_arg=None):
     """Main training function - FIXED for Windows multiprocessing"""
-    global batch_size, num_epochs
+    global batch_size, num_epochs, best_val_acc
     
     # Override defaults if arguments provided
     if batch_size_arg is not None:
@@ -537,7 +537,7 @@ def main(batch_size_arg=None, epochs_arg=None):
     
     # Update model paths to save in output directory
     model_path = os.path.join(output_dir, model_name)
-    best_model_path = os.path.join(output_dir, f"best_{model_name}")
+    # best_model_path = os.path.join(output_dir, f"best_{model_name}")  # Disabled
 
     # Training setup
     criterion = nn.CrossEntropyLoss()
@@ -600,11 +600,10 @@ def main(batch_size_arg=None, epochs_arg=None):
             print(f"Val Loss: {avg_val_loss:.4f}, Val Acc: {val_acc:.4f}")
             print("-" * 50)
             
-            # Save best model
+            # Best model saving disabled
             if val_acc > best_val_acc:
                 best_val_acc = val_acc
-                torch.save(model.state_dict(), best_model_path)
-                print(f"✓ New best model saved with validation accuracy: {best_val_acc:.4f}")
+                print(f"✓ New best validation accuracy achieved: {best_val_acc:.4f} (auto-save disabled)")
         else:
             # Training without validation
             scheduler.step(avg_train_loss)

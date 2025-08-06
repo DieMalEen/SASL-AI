@@ -551,7 +551,7 @@ def main(batch_size_arg=None, epochs_arg=None):
                 
                 if batch_idx % 10 == 0:
                     batch_time = time.time() - epoch_start
-                    print(f"Epoch {epoch+1}/{num_epochs}, Batch {batch_idx}, Loss: {loss.item():.4f}, Time: {batch_time:.1f}s")
+                    print(f"Epoch {epoch+1}/{num_epochs}, Batch {batch_idx}/{len(train_loader)}, Loss: {loss.item():.4f}, Time: {batch_time:.1f}s")
                     
                     if batch_idx % 30 == 0:  # System usage every 30 batches
                         print_system_usage(device)

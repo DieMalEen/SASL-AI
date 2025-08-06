@@ -9,14 +9,20 @@ os.environ['MEDIAPIPE_DISABLE_GPU'] = '1'  # Optional: Disable GPU to reduce war
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="mediapipe")
 
-import torch
-import cv2
-from torchvision import transforms
-from PIL import Image
-import numpy as np
 import json
+import os
+import sys
 import time
+import cv2
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torchvision.transforms as transforms
+import numpy as np
 from collections import deque
+import importlib.util
+from PIL import Image  # Add this import for PIL Image
+
 try:
     from hand_detection import HandDetector
     HAND_DETECTION_AVAILABLE = True
@@ -24,24 +30,37 @@ except ImportError:
     print("Hand detection not available. Using fallback mode.")
     HAND_DETECTION_AVAILABLE = False
 
-# Load class names from the saved JSON file
-import os
-import sys
-
-# Add parent directory to path for imports
-parent_dir = os.path.dirname(os.path.dirname(__file__))
-sys.path.insert(0, os.path.join(parent_dir, '03_DATA_CONFIG'))
-sys.path.insert(0, os.path.join(parent_dir, '02_FALLBACK_COMPATIBILITY'))
-
-config_path = os.path.join(parent_dir, '03_DATA_CONFIG', 'class_names.json')
-output_dir = os.path.join(parent_dir, '05_OUTPUT_GENERATED')
-
-with open(config_path, "r") as f:
-    class_names = json.load(f)
-
-# Set up device and paths
+# Set up device and paths first (before loading class names)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)
+output_dir = os.path.join(project_root, "05_OUTPUT_GENERATED")
+
+# Load class names from JSON file
+def load_class_names():
+    """Load class names from the JSON configuration file"""
+    class_names_path = os.path.join(os.path.dirname(current_dir), "03_DATA_CONFIG", "class_names.json")
+    
+    try:
+        with open(class_names_path, 'r') as f:
+            class_names = json.load(f)
+        print(f"Loaded {len(class_names)} classes from class_names.json")
+        return class_names
+    except FileNotFoundError:
+        print(f"ERROR: class_names.json not found at {class_names_path}")
+        print("Please ensure the class_names.json file exists in the 03_DATA_CONFIG directory.")
+        sys.exit(1)
+    except json.JSONDecodeError as e:
+        print(f"ERROR: Failed to parse class_names.json: {e}")
+        print("Please check that class_names.json contains valid JSON format.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"ERROR: Unexpected error loading class_names.json: {e}")
+        sys.exit(1)
+
+# Replace the hardcoded class_names list with dynamic loading
+class_names = load_class_names()
+print(f"Total classes configured: {len(class_names)}")
 
 # Import CNN base for all models
 try:
@@ -72,6 +91,29 @@ forced_model_path = os.environ.get('SASL_FORCE_MODEL_PATH')
 model = None
 MODEL_TYPE = None
 
+def validate_model(model, device, class_names):
+    """Test the model with dummy data to check for NaN outputs"""
+    try:
+        # Create dummy input tensor
+        dummy_input = torch.randn(1, 16, 3, 224, 224).to(device)
+        
+        with torch.no_grad():
+            outputs = model(dummy_input)
+            
+            # Check for NaN or infinite values
+            if torch.isnan(outputs).any() or torch.isinf(outputs).any():
+                return False
+            
+            # Check if softmax works
+            probabilities = torch.softmax(outputs, dim=1)
+            if torch.isnan(probabilities).any() or torch.isinf(probabilities).any():
+                return False
+            
+            return True
+    except Exception as e:
+        print(f"Model validation failed: {e}")
+        return False
+
 def load_model_from_checkpoint(model_path, checkpoint_data):
     """Load model based on checkpoint structure"""
     global model, MODEL_TYPE
@@ -92,7 +134,15 @@ def load_model_from_checkpoint(model_path, checkpoint_data):
         model = FastCNNLSTM(num_classes=len(class_names)).to(device)
         model.load_state_dict(checkpoint_data)
         MODEL_TYPE = "gpu_optimized"
-        print(f"Successfully loaded FastCNNLSTM model")
+        
+        # Validate the model for NaN outputs
+        if not validate_model(model, device, class_names):
+            print(f"⚠️  Model validation failed - model produces NaN outputs")
+            model = None
+            MODEL_TYPE = None
+            return False
+        
+        print(f"Successfully loaded and validated FastCNNLSTM model")
         return True
         
     elif 'lstm.weight_ih_l0_reverse' in checkpoint_data and 'attention.in_proj_weight' in checkpoint_data:
@@ -137,7 +187,15 @@ def load_model_from_checkpoint(model_path, checkpoint_data):
             MODEL_TYPE = "hand_focused"
         
         model.load_state_dict(checkpoint_data)
-        print(f"Successfully loaded {MODEL_TYPE} model")
+        
+        # Validate the model for NaN outputs
+        if not validate_model(model, device, class_names):
+            print(f"! Model validation failed - model produces NaN outputs")
+            model = None
+            MODEL_TYPE = None
+            return False
+        
+        print(f"Successfully loaded and validated {MODEL_TYPE} model")
         return True
     
     return False
@@ -146,11 +204,11 @@ def load_model_from_checkpoint(model_path, checkpoint_data):
 if forced_model_path and os.path.exists(forced_model_path):
     print(f"Using forced model selection: {forced_model_path}")
     try:
-        checkpoint = torch.load(forced_model_path, map_location=device)
+        checkpoint = torch.load(forced_model_path, map_location=device, weights_only=False)
         if load_model_from_checkpoint(forced_model_path, checkpoint):
             print(f"Forced model loaded successfully")
         else:
-            print("Unknown model architecture, falling back to auto-detection")
+            print("Unknown model architecture or class mismatch, falling back to auto-detection")
             forced_model_path = None
     except Exception as e:
         print(f"Error loading forced model: {e}")
@@ -163,36 +221,37 @@ if model is None:
     
     # Try to load models with smart architecture detection - check all model types
     model_paths = [
-        # GPU-optimized models
+        # GPU-optimized models (actual saved filenames)
+        os.path.join(output_dir, "gpu_sasl_model.pth"),
         os.path.join(output_dir, "gpu_optimized_sasl_model.pth"),
-        os.path.join(output_dir, "best_gpu_optimized_sasl_model.pth"),
-        # Hybrid models  
+        # Hybrid models (correct filename from hybrid training script)
+        os.path.join(output_dir, "hybrid_sasl_model.pth"),
         os.path.join(output_dir, "hybrid_cpu_gpu_sasl_model.pth"),
-        os.path.join(output_dir, "best_hybrid_cpu_gpu_sasl_model.pth"),
-        # Original hand-focused models
+        # Hand-focused models (actual saved filenames)
         os.path.join(output_dir, "hand_focused_sasl_model.pth"),
-        os.path.join(output_dir, "best_hand_focused_sasl_model.pth"),
         # Local fallbacks
+        "gpu_sasl_model.pth",
         "gpu_optimized_sasl_model.pth",
+        "hybrid_sasl_model.pth",
         "hybrid_cpu_gpu_sasl_model.pth", 
-        "hand_focused_sasl_model.pth",
-        "best_hand_focused_sasl_model.pth"
+        "hand_focused_sasl_model.pth"
     ]
     
     model_loaded = False
     for model_path in model_paths:
         if os.path.exists(model_path):
             try:
-                checkpoint = torch.load(model_path, map_location=device)
+                checkpoint = torch.load(model_path, map_location=device, weights_only=False)
                 if load_model_from_checkpoint(model_path, checkpoint):
                     print(f"Auto-detected and loaded model from {model_path}")
                     model_loaded = True
                     break
             except Exception as e:
                 if "size mismatch" in str(e) or "Missing key" in str(e):
-                    print(f"Architecture mismatch in {model_path}, trying next...")
+                    print(f"Architecture mismatch in {model_path} (wrong number of classes), trying next...")
                     continue
                 else:
+                    print(f"Error with {model_path}: {e}")
                     continue
     
     # Final fallback to standard model if nothing worked
@@ -218,6 +277,12 @@ if model is None:
 
 # Evaluation mode
 model.eval()
+
+# Ensure MODEL_TYPE is not None
+if MODEL_TYPE is None:
+    MODEL_TYPE = "unknown"
+    print("Warning: MODEL_TYPE was None, set to 'unknown'")
+
 print(f"Model ready: {MODEL_TYPE.upper()} architecture")
 
 # Clean up environment variable
@@ -310,11 +375,33 @@ class EnhancedGestureDetector:
             
             with torch.no_grad():
                 outputs = model(frames_tensor)
+                
+                # Check for NaN or infinite values in model output
+                if torch.isnan(outputs).any() or torch.isinf(outputs).any():
+                    print("Error: Model is producing invalid outputs. Model may be corrupted.")
+                    print("Switching to fallback standard model...")
+                    return "MODEL_ERROR", 0.0, "Model Error - Using Fallback"
+                
                 probabilities = torch.softmax(outputs, dim=1)
+                
+                # Check for NaN in probabilities after softmax
+                if torch.isnan(probabilities).any() or torch.isinf(probabilities).any():
+                    print("Error: Softmax produced invalid probabilities")
+                    return "MODEL_ERROR", 0.0, "Softmax Error"
+                
                 confidence, predicted_idx = torch.max(probabilities, 1)
+                
+                # Ensure valid indices and confidence
+                if predicted_idx.item() >= len(class_names) or torch.isnan(confidence).any():
+                    print(f"Warning: Invalid prediction - idx: {predicted_idx.item()}, confidence: {confidence.item()}")
+                    return None, 0.0, None
                 
                 predicted_class = class_names[predicted_idx.item()]
                 confidence_score = confidence.item()
+                
+                # Filter out very low confidence predictions (very low threshold for better visibility)
+                if confidence_score < 0.01:
+                    return None, 0.0, None
                 
                 # Add to prediction history for stability
                 self.prediction_history.append((predicted_class, confidence_score))
@@ -341,11 +428,11 @@ class EnhancedGestureDetector:
             return None, 0.0, None
     
     def _get_stable_prediction(self):
-        if len(self.prediction_history) < 3:
+        if len(self.prediction_history) < 1:  # Show predictions immediately
             return self.prediction_history[-1][0] if self.prediction_history else None
         
-        # Count recent predictions
-        recent_predictions = [pred[0] for pred in list(self.prediction_history)[-3:]]
+        # Count recent predictions (immediate response)
+        recent_predictions = [pred[0] for pred in list(self.prediction_history)[-1:]]
         
         # Return most common prediction
         prediction_counts = {}
@@ -390,13 +477,11 @@ def run_enhanced_camera():
     cap.set(cv2.CAP_PROP_FPS, 30)
     
     detector = EnhancedGestureDetector(
-        buffer_size=16, 
-        stability_threshold=5,
+        buffer_size=8,  # Reduced for faster initial predictions
+        stability_threshold=2,  # Reduced for faster predictions
         use_hand_detection=HAND_DETECTION_AVAILABLE
     )
     
-    fps_counter = 0
-    fps_start_time = time.time()
     show_hand_overlay = True
     
     while True:
@@ -404,9 +489,8 @@ def run_enhanced_camera():
         if not ret:
             break
         
-        # Flip frame horizontally for mirror effect
-        frame = cv2.flip(frame, 1)
-        fps_counter += 1
+        # Use natural camera orientation (no mirroring)
+        # frame = cv2.flip(frame, 1)  # Commented out for natural view
         
         # Add frame to detector
         detector.add_frame(frame.copy())
@@ -428,46 +512,39 @@ def run_enhanced_camera():
         if detector.is_buffer_ready():
             prediction, confidence, attention_info = detector.predict_gesture(model, device)
             
-            if prediction:
-                # Display prediction
+            if prediction and prediction != "MODEL_ERROR":
+                # Display prediction with larger, more visible text
                 text = f"Gesture: {prediction} ({confidence:.2f})"
-                cv2.putText(display_frame, text, (10, 30), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                cv2.putText(display_frame, text, (10, 40), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
                 
                 # Display model type
                 model_text = f"Model: {MODEL_TYPE.replace('_', ' ').title()}"
-                cv2.putText(display_frame, model_text, (10, 60), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                cv2.putText(display_frame, model_text, (10, 80), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
                 
                 # Display attention info if available
                 if attention_info:
-                    cv2.putText(display_frame, attention_info, (10, 90), 
+                    cv2.putText(display_frame, attention_info, (10, 110), 
                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+            elif prediction == "MODEL_ERROR":
+                # Show model error message
+                cv2.putText(display_frame, "Model Error - Check Console", (10, 40), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
         else:
             # Show buffer filling status
             buffer_status = f"Collecting frames: {len(detector.frame_buffer)}/{detector.frame_buffer.maxlen}"
-            cv2.putText(display_frame, buffer_status, (10, 30), 
+            cv2.putText(display_frame, buffer_status, (10, 40), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
-        
-        # Calculate and display FPS
-        if fps_counter % 30 == 0:
-            fps = 30 / (time.time() - fps_start_time)
-            fps_start_time = time.time()
-        else:
-            fps = fps_counter / (time.time() - fps_start_time) if fps_counter > 0 else 0
-        
-        fps_text = f"FPS: {fps:.1f}"
-        cv2.putText(display_frame, fps_text, (10, display_frame.shape[0] - 60), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         
         # Display hand detection status
         hand_status = f"Hand Detection: {'ON' if show_hand_overlay and detector.use_hand_detection else 'OFF'}"
-        cv2.putText(display_frame, hand_status, (10, display_frame.shape[0] - 30), 
+        cv2.putText(display_frame, hand_status, (10, display_frame.shape[0] - 50), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
         
         # Display controls
         cv2.putText(display_frame, "Controls: 'q'=quit, 'h'=toggle hands, 'r'=reset", 
-                   (10, display_frame.shape[0] - 10), 
+                   (10, display_frame.shape[0] - 20), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
         
         cv2.imshow('Enhanced SASL Recognition', display_frame)

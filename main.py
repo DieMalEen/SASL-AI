@@ -362,9 +362,11 @@ class SASLLauncher:
         available_models = []
         
         model_files = [
+            ("gpu_sasl_model.pth", "GPU-Optimized Model (FastCNNLSTM)"),
             ("gpu_optimized_sasl_model.pth", "GPU-Optimized Model (FastCNNLSTM)"),
+            ("hybrid_sasl_model.pth", "Hybrid CPU+GPU Model"),
             ("hybrid_cpu_gpu_sasl_model.pth", "Hybrid CPU+GPU Model"),
-            ("hand_focused_sasl_model.pth", "Hand-Focused Model"),
+            ("hand_focused_sasl_model.pth", "Hand-Focused Model")
         ]
         
         for model_file, description in model_files:
@@ -429,12 +431,12 @@ os.environ['SASL_FORCE_MODEL_PATH'] = r"{model_path}"
 sys.path.insert(0, os.path.dirname(__file__))
 
 # Import and run the enhanced camera
-from enhanced_camera import main
+from enhanced_camera import run_enhanced_camera
 
 if __name__ == "__main__":
     print("Forced model selection: {description}")
     print("Model path: {model_path}")
-    main()
+    run_enhanced_camera()
 '''
         
         temp_script_path = os.path.join(self.base_dir, '01_PRIMARY_SYSTEM', 'temp_camera_launcher.py')
