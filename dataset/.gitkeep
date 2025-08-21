@@ -1,0 +1,3 @@
+# This file ensures the 05_OUTPUT_GENERATED directory is tracked by Git
+# All generated content (models, videos, images, etc.) will be created here
+# The contents are ignored by .gitignore but the folder structure is preserved
