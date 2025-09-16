@@ -1,3 +1,2 @@
-# This file ensures the 05_OUTPUT_GENERATED directory is tracked by Git
-# All generated content (models, videos, images, etc.) will be created here
-# The contents are ignored by .gitignore but the folder structure is preserved
+# This file ensures the dataset directory is tracked by Git
+# The dataset directory is intended to store datasets used for training and evaluation

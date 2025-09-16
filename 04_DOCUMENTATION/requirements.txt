@@ -3,31 +3,31 @@
 
 # ===== CORE DEPENDENCIES =====
 # Essential PyTorch components for deep learning
-torch>=1.9.0
-torchvision>=0.10.0
-torchaudio>=0.9.0
+torch
+torchvision
+torchaudio
 
 # Computer Vision and Image Processing
-opencv-python>=4.5.0
-Pillow>=8.3.0
-numpy>=1.21.0
+opencv-python
+Pillow
+numpy
 
 # Hand Detection and Tracking (Core Feature)
-mediapipe>=0.8.0
+mediapipe
 
 # Machine Learning Utilities
-scikit-learn>=1.0.0
+scikit-learn
 
 # ===== TRAINING ENHANCEMENTS =====
 # Progress bars and training monitoring
-tqdm>=4.62.0
+tqdm
 
 # Data visualization for training analysis
-matplotlib>=3.4.0
-seaborn>=0.11.0
+matplotlib
+seaborn
 
 # Configuration and logging
-pyyaml>=5.4.0
+pyyaml
 
 # ===== GPU OPTIMIZATION =====
 # CUDA support (automatically installed with torch if CUDA available)
@@ -35,27 +35,27 @@ pyyaml>=5.4.0
 
 # ===== OPTIONAL PERFORMANCE ENHANCEMENTS =====
 # Fast image transformations
-albumentations>=1.1.0
+albumentations
 
 # Memory profiling and optimization
-psutil>=5.8.0
+psutil
 
 # JSON handling improvements
-ujson>=4.0.0
+ujson
 
 # ===== DEVELOPMENT AND DEBUGGING =====
 # Interactive development
-jupyter>=1.0.0
-ipywidgets>=7.6.0
+jupyter
+ipywidgets
 
 # Code formatting and quality
-black>=21.0.0
-flake8>=3.9.0
+black
+flake8
 
 # ===== SYSTEM COMPATIBILITY =====
 # Ensure compatibility across different systems
-setuptools>=57.0.0
-wheel>=0.36.0
+setuptools
+wheel
 
 # ===== INSTALLATION NOTES =====
 # 

@@ -29,7 +29,7 @@ best_val_acc = 0.0
 
 # Legacy dataset classes (for fallback compatibility)
 class AdvancedSASLDataset(Dataset):
-    def __init__(self, videos, labels, base_transform, augment=False, augment_factor=10):
+    def __init__(self, videos, labels, base_transform, augment=True, augment_factor=10):
         self.videos = videos
         self.labels = labels
         self.base_transform = base_transform
