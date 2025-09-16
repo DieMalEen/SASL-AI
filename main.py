@@ -21,7 +21,7 @@ class SASLLauncher:
             os.path.join(self.base_dir, '03_DATA_CONFIG'),
             os.path.join(self.base_dir, '04_DOCUMENTATION'),
             os.path.join(self.base_dir, '05_OUTPUT_GENERATED')
-        ]
+        ] 
         
         for path in paths_to_add:
             if path not in sys.path and os.path.exists(path):
@@ -45,7 +45,7 @@ class SASLLauncher:
         print("\nTraining Options")
         print("=" * 30)
         print("Choose training method:")
-        print("1. CPU Training (Universal)")
+        print("1. GPU-Optimized Training (A10-12Q)")
         print("2. Back to Main Menu")
         print()
     
@@ -117,20 +117,22 @@ class SASLLauncher:
             print("\nBenchmark interrupted by user.")
     
     def run_training_with_method(self, method):
-        """Run training with specified method (CPU only)"""
+        """Run training with GPU-optimized method for A10-12Q"""
         if method == 'cpu':
-            description = 'CPU Training (Universal)'
+            description = 'GPU-Optimized Training (A10-12Q)'
             script_name = 'hand_focused_CNN_LSTM.py'
-            recommended_batch_size = 2
-            recommended_epochs = 20
+            recommended_batch_size = 8  # REDUCED for system stability
+            recommended_epochs = 10  # REDUCED for faster completion
             print(f"\n{description}")
             print("=" * 60)
-            print(">> CPU Training - Universal compatibility")
-            print("   Works on all systems, slower but reliable")
-            print("   Uses hand-focused training with MediaPipe detection")
+            print("🔥 GPU-Optimized Training - NVIDIA A10-12Q (Stability Mode)")
+            print("   ⚡ Mixed precision training with conservative settings")
+            print("   🧠 Lightweight ResNet18 backbone for system stability")
+            print("   💾 8GB VRAM optimized batch processing")
+            print("   🎯 Reduced augmentation to prevent system crashes")
             print(f"\n| Recommended Settings for {description}:")
-            print(f"   Batch Size: {recommended_batch_size} (Lower batch size to avoid memory issues, more epochs for convergence)")
-            print(f"   Epochs: {recommended_epochs}")
+            print(f"   Batch Size: {recommended_batch_size} (Conservative for system stability)")
+            print(f"   Epochs: {recommended_epochs} (Reduced for faster completion)")
             print(f"\n* Training Configuration:")
             while True:
                 try:
@@ -143,8 +145,10 @@ class SASLLauncher:
                         if batch_size < 1:
                             print("X Batch size must be at least 1")
                             continue
-                        if batch_size > 4:
-                            print("! Warning: Large batch sizes may cause CPU memory issues")
+                        if batch_size > 16:
+                            print("! Warning: Large batch sizes may cause system crashes")
+                        elif batch_size < 4:
+                            print("! Note: Very small batch sizes may not utilize GPU well")
                         break
                 except ValueError:
                     print("X Please enter a valid number")
@@ -159,8 +163,8 @@ class SASLLauncher:
                         if epochs < 1:
                             print("X Epochs must be at least 1")
                             continue
-                        if epochs > 50:
-                            print("! Warning: Training with >50 epochs may take a very long time")
+                        if epochs > 25:
+                            print("! Warning: Training with >25 epochs may take a very long time")
                         break
                 except ValueError:
                     print("X Please enter a valid number")
@@ -168,15 +172,27 @@ class SASLLauncher:
             print(f"   Method: {description}")
             print(f"   Batch Size: {batch_size}")
             print(f"   Epochs: {epochs}")
-            estimated_time = (15 + batch_size * 2) * epochs
+            # Updated time estimates for stability mode
+            estimated_time = (2 + batch_size * 0.1) * epochs  # More conservative estimate
             if estimated_time < 60:
                 time_str = f"{estimated_time:.0f} minutes"
             else:
                 hours = estimated_time // 60
                 minutes = estimated_time % 60
                 time_str = f"{hours:.0f}h {minutes:.0f}m"
-            print(f"   Estimated Time: {time_str}")
-            print("\nTraining will begin shortly...")
+            print(f"   Estimated Time: {time_str} (Stability mode - conservative estimate)")
+            print(f"\n🚀 Stability Mode Features:")
+            print(f"   • Mixed Precision Training (controlled speed)")
+            print(f"   • Single-threaded Data Loading (no multiprocessing crashes)")
+            print(f"   • ResNet18 Backbone (lightweight, stable)")
+            print(f"   • Reduced Augmentation (2x instead of 10x)")
+            print(f"   • Conservative Memory Usage (system friendly)")
+            print(f"   • Memory-optimized for system stability")
+            print(f"\n💡 System Stability Notes:")
+            print(f"   • Training now uses conservative settings to prevent crashes")
+            print(f"   • Batch size reduced to prevent memory issues")
+            print(f"   • Single-threaded loading prevents multiprocessing hangs")
+            print("\n🎯 Training will begin shortly...")
             print("You can stop training at any time with Ctrl+C")
             print("The model will be saved automatically during training.")
             confirm = input(f"\nStart {description} with these settings? (y/n): ").strip().lower()
@@ -277,26 +293,51 @@ class SASLLauncher:
             print(f"Missing dependencies: {e}")
     
     def run_camera_with_model_selection(self):
-        """Run camera with model selection menu (CPU only)"""
+        """Run camera with model selection menu"""
         print("\nSASL Camera - Model Selection")
         print("=" * 40)
         output_dir = os.path.join(self.base_dir, "05_OUTPUT_GENERATED")
-        model_file = "hand_focused_sasl_model.pth"
-        model_path = os.path.join(output_dir, model_file)
-        if not os.path.exists(model_path):
-            print("No trained model found!")
+        
+        # Check available models
+        available_models = []
+        model_files = {
+            "gpu_optimized_sasl_model.pth": "GPU-Optimized Model (A10-12Q)",
+            "focused_sasl_model.pth": "Focused Model (6 classes)",
+            "simple_sasl_model.pth": "Simple Model"
+        }
+        
+        print("Available models:")
+        choice_map = {}
+        choice_num = 1
+        
+        for model_file, description in model_files.items():
+            model_path = os.path.join(output_dir, model_file)
+            if os.path.exists(model_path):
+                print(f"{choice_num}. {description}")
+                choice_map[str(choice_num)] = (model_path, description)
+                available_models.append((model_path, description))
+                choice_num += 1
+        
+        if not available_models:
+            print("No trained models found!")
             print("Please train a model first using option 2 (Training).")
             return
-        print("Available model:")
-        print(f"1. Hand-Focused Model")
+            
         print("0. Back to main menu")
+        
         try:
-            choice = input("\nSelect model (1, Enter for default): ").strip()
+            choice = input(f"\nSelect model (1-{len(available_models)}, Enter for default): ").strip()
             if choice == "0":
                 return
             elif choice == "" or choice == "1":
-                print("Using Hand-Focused Model...")
-                self.run_camera_with_specific_model(model_path, "Hand-Focused Model")
+                # Use first available model as default
+                model_path, description = available_models[0]
+                print(f"Using {description}...")
+                self.run_camera_with_specific_model(model_path, description)
+            elif choice in choice_map:
+                model_path, description = choice_map[choice]
+                print(f"Using {description}...")
+                self.run_camera_with_specific_model(model_path, description)
             else:
                 print("Invalid choice.")
         except ValueError:
@@ -310,6 +351,8 @@ class SASLLauncher:
         print("Press 'q' to quit, 'h' to toggle hand detection, 'r' to reset")
         
         # Create a temporary script to force model selection
+        # Properly escape the path for Windows
+        escaped_model_path = model_path.replace('\\', '\\\\')
         temp_script_content = f'''#!/usr/bin/env python3
 """
 Temporary launcher for enhanced camera with specific model
@@ -318,7 +361,7 @@ import os
 import sys
 
 # Set environment variable to force specific model
-os.environ['SASL_FORCE_MODEL_PATH'] = r"{model_path}"
+os.environ['SASL_FORCE_MODEL_PATH'] = r"{escaped_model_path}"
 
 # Add current directory to path
 sys.path.insert(0, os.path.dirname(__file__))
@@ -328,7 +371,7 @@ from enhanced_camera import run_enhanced_camera
 
 if __name__ == "__main__":
     print("Forced model selection: {description}")
-    print("Model path: {model_path}")
+    print(r"Model path: {escaped_model_path}")
     run_enhanced_camera()
 '''
         
@@ -358,7 +401,7 @@ if __name__ == "__main__":
         """Show manual commands if interactive guide fails"""
         print("\nManual Commands:")
         print("=" * 30)
-        print("CPU Training: python 01_PRIMARY_SYSTEM/hand_focused_CNN_LSTM.py")
+        print("GPU-Optimized Training: python 01_PRIMARY_SYSTEM/hand_focused_CNN_LSTM.py")
         print("Camera: python 01_PRIMARY_SYSTEM/enhanced_camera.py")
         print("Demo: python 01_PRIMARY_SYSTEM/hand_tracking_demo.py")
     
@@ -379,15 +422,9 @@ if __name__ == "__main__":
                         train_choice = input("Enter your choice: ").strip()
                         
                         if train_choice == '1':
-                            self.run_training_with_method('gpu')
+                            self.run_training_with_method('cpu')  # This will actually run GPU-optimized training
                             break
                         elif train_choice == '2':
-                            self.run_training_with_method('cpu')
-                            break
-                        elif train_choice == '3':
-                            self.run_training_with_method('hybrid')
-                            break
-                        elif train_choice == '4':
                             break  # Back to main menu
                         else:
                             print("Invalid choice. Please try again.")
