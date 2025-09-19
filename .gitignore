@@ -47,7 +47,13 @@ Thumbs.db
 !05_OUTPUT_GENERATED/
 !05_OUTPUT_GENERATED/.gitkeep
 
-# Dataset folder - ignore contents but keep folder structure
+# Dataset folders - ignore contents but keep folder structure
 dataset/*
 !dataset/
 !dataset/.gitkeep
+
+dataset_images/*
+!dataset_images/
+!dataset_images/.gitkeep
+
+# Charts folder - ignore contents but keep folder structure

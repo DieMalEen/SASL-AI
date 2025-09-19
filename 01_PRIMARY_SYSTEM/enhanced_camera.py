@@ -119,7 +119,33 @@ def load_model_from_checkpoint(model_path, checkpoint_data):
     global model, MODEL_TYPE
     
     # Detect model architecture type based on checkpoint keys
-    if 'lstm.weight_ih_l0_reverse' not in checkpoint_data and 'attention.in_proj_weight' not in checkpoint_data:
+    if 'backbone.fc.in_features' in str(checkpoint_data.keys()) or 'classifier.0.weight' in checkpoint_data:
+        # This is a SASLImageCNN (Image-based) model
+        print(f"Detected SASLImageCNN model")
+        
+        # Import and create SASLImageCNN model
+        import importlib.util
+        image_training_path = os.path.join(current_dir, "image_based_training.py")
+        spec = importlib.util.spec_from_file_location("image_based_training", image_training_path)
+        image_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(image_module)
+        
+        SASLImageCNN = image_module.SASLImageCNN
+        model = SASLImageCNN(num_classes=len(class_names), pretrained=True).to(device)
+        model.load_state_dict(checkpoint_data)
+        MODEL_TYPE = "image_based"
+        
+        # Validate the model for NaN outputs
+        if not validate_model(model, device, class_names):
+            print(f"Model validation failed - model produces NaN outputs")
+            model = None
+            MODEL_TYPE = None
+            return False
+        
+        print(f"Successfully loaded and validated SASLImageCNN model")
+        return True
+        
+    elif 'lstm.weight_ih_l0_reverse' not in checkpoint_data and 'attention.in_proj_weight' not in checkpoint_data:
         # This is a FastCNNLSTM (GPU-optimized) model
         print(f"Detected FastCNNLSTM model")
         
@@ -137,7 +163,7 @@ def load_model_from_checkpoint(model_path, checkpoint_data):
         
         # Validate the model for NaN outputs
         if not validate_model(model, device, class_names):
-            print(f"⚠️  Model validation failed - model produces NaN outputs")
+            print(f"Model validation failed - model produces NaN outputs")
             model = None
             MODEL_TYPE = None
             return False
@@ -221,6 +247,9 @@ if model is None:
     
     # Try to load models with smart architecture detection - check all model types
     model_paths = [
+        # Image-based models (NEW!)
+        os.path.join(output_dir, "best_image_sasl_model.pth"),
+        os.path.join(output_dir, "final_image_sasl_model.pth"),
         # GPU-optimized models (actual saved filenames)
         os.path.join(output_dir, "gpu_sasl_model.pth"),
         os.path.join(output_dir, "gpu_optimized_sasl_model.pth"),
@@ -230,6 +259,8 @@ if model is None:
         # Hand-focused models (actual saved filenames)
         os.path.join(output_dir, "hand_focused_sasl_model.pth"),
         # Local fallbacks
+        "best_image_sasl_model.pth",
+        "final_image_sasl_model.pth",
         "gpu_sasl_model.pth",
         "gpu_optimized_sasl_model.pth",
         "hybrid_sasl_model.pth",
@@ -369,59 +400,106 @@ class EnhancedGestureDetector:
             return None, 0.0, None
         
         try:
-            # Convert buffer to tensor and predict
-            frames_tensor = preprocess_frames(list(self.frame_buffer))
-            frames_tensor = frames_tensor.unsqueeze(0).to(device)
-            
-            with torch.no_grad():
-                outputs = model(frames_tensor)
+            if MODEL_TYPE == "image_based":
+                # Image-based models use single frames
+                # Take the most recent frame from buffer
+                latest_frame = list(self.frame_buffer)[-1]
+                frame_tensor = preprocess_frames([latest_frame])
+                frame_tensor = frame_tensor.unsqueeze(0).to(device)
                 
-                # Check for NaN or infinite values in model output
-                if torch.isnan(outputs).any() or torch.isinf(outputs).any():
-                    print("Error: Model is producing invalid outputs. Model may be corrupted.")
-                    print("Switching to fallback standard model...")
-                    return "MODEL_ERROR", 0.0, "Model Error - Using Fallback"
+                with torch.no_grad():
+                    outputs = model(frame_tensor)
+                    
+                    # Check for NaN or infinite values in model output
+                    if torch.isnan(outputs).any() or torch.isinf(outputs).any():
+                        print("Error: Image model is producing invalid outputs. Model may be corrupted.")
+                        return "MODEL_ERROR", 0.0, "Image Model Error"
+                    
+                    probabilities = torch.softmax(outputs, dim=1)
+                    
+                    # Check for NaN in probabilities after softmax
+                    if torch.isnan(probabilities).any() or torch.isinf(probabilities).any():
+                        print("Error: Softmax produced invalid probabilities")
+                        return "MODEL_ERROR", 0.0, "Softmax Error"
+                    
+                    confidence, predicted_idx = torch.max(probabilities, 1)
+                    
+                    # Ensure valid indices and confidence
+                    if predicted_idx.item() >= len(class_names) or torch.isnan(confidence).any():
+                        print(f"Warning: Invalid prediction - idx: {predicted_idx.item()}, confidence: {confidence.item()}")
+                        return None, 0.0, None
+                    
+                    predicted_class = class_names[predicted_idx.item()]
+                    confidence_score = confidence.item()
+                    
+                    # Filter out very low confidence predictions
+                    if confidence_score < 0.01:
+                        return None, 0.0, None
+                    
+                    # Add to prediction history for stability
+                    self.prediction_history.append((predicted_class, confidence_score))
+                    
+                    # Get stable prediction
+                    stable_prediction = self._get_stable_prediction()
+                    
+                    attention_info = "Image-based CNN (static images)"
+                    
+                    return stable_prediction, confidence_score, attention_info
+            else:
+                # Video sequence models (existing logic)
+                # Convert buffer to tensor and predict
+                frames_tensor = preprocess_frames(list(self.frame_buffer))
+                frames_tensor = frames_tensor.unsqueeze(0).to(device)
                 
-                probabilities = torch.softmax(outputs, dim=1)
-                
-                # Check for NaN in probabilities after softmax
-                if torch.isnan(probabilities).any() or torch.isinf(probabilities).any():
-                    print("Error: Softmax produced invalid probabilities")
-                    return "MODEL_ERROR", 0.0, "Softmax Error"
-                
-                confidence, predicted_idx = torch.max(probabilities, 1)
-                
-                # Ensure valid indices and confidence
-                if predicted_idx.item() >= len(class_names) or torch.isnan(confidence).any():
-                    print(f"Warning: Invalid prediction - idx: {predicted_idx.item()}, confidence: {confidence.item()}")
-                    return None, 0.0, None
-                
-                predicted_class = class_names[predicted_idx.item()]
-                confidence_score = confidence.item()
-                
-                # Filter out very low confidence predictions (very low threshold for better visibility)
-                if confidence_score < 0.01:
-                    return None, 0.0, None
-                
-                # Add to prediction history for stability
-                self.prediction_history.append((predicted_class, confidence_score))
-                
-                # Get stable prediction
-                stable_prediction = self._get_stable_prediction()
-                
-                # Get model-specific information
-                attention_info = None
-                if hasattr(model, 'attention') and MODEL_TYPE in ["hand_focused", "hybrid_cpu_gpu"]:
-                    if MODEL_TYPE == "hand_focused":
-                        attention_info = "Hand-focused attention active"
-                    elif MODEL_TYPE == "hybrid_cpu_gpu":
-                        attention_info = "Hybrid CPU+GPU with attention"
-                elif MODEL_TYPE in ["gpu_optimized", "fast_cnn_lstm"]:
-                    attention_info = "GPU-optimized (streamlined)"
-                elif MODEL_TYPE == "standard":
-                    attention_info = "Standard CNN-LSTM"
-                
-                return stable_prediction, confidence_score, attention_info
+                with torch.no_grad():
+                    outputs = model(frames_tensor)
+                    
+                    # Check for NaN or infinite values in model output
+                    if torch.isnan(outputs).any() or torch.isinf(outputs).any():
+                        print("Error: Model is producing invalid outputs. Model may be corrupted.")
+                        print("Switching to fallback standard model...")
+                        return "MODEL_ERROR", 0.0, "Model Error - Using Fallback"
+                    
+                    probabilities = torch.softmax(outputs, dim=1)
+                    
+                    # Check for NaN in probabilities after softmax
+                    if torch.isnan(probabilities).any() or torch.isinf(probabilities).any():
+                        print("Error: Softmax produced invalid probabilities")
+                        return "MODEL_ERROR", 0.0, "Softmax Error"
+                    
+                    confidence, predicted_idx = torch.max(probabilities, 1)
+                    
+                    # Ensure valid indices and confidence
+                    if predicted_idx.item() >= len(class_names) or torch.isnan(confidence).any():
+                        print(f"Warning: Invalid prediction - idx: {predicted_idx.item()}, confidence: {confidence.item()}")
+                        return None, 0.0, None
+                    
+                    predicted_class = class_names[predicted_idx.item()]
+                    confidence_score = confidence.item()
+                    
+                    # Filter out very low confidence predictions (very low threshold for better visibility)
+                    if confidence_score < 0.01:
+                        return None, 0.0, None
+                    
+                    # Add to prediction history for stability
+                    self.prediction_history.append((predicted_class, confidence_score))
+                    
+                    # Get stable prediction
+                    stable_prediction = self._get_stable_prediction()
+                    
+                    # Get model-specific information
+                    attention_info = None
+                    if hasattr(model, 'attention') and MODEL_TYPE in ["hand_focused", "hybrid_cpu_gpu"]:
+                        if MODEL_TYPE == "hand_focused":
+                            attention_info = "Hand-focused attention active"
+                        elif MODEL_TYPE == "hybrid_cpu_gpu":
+                            attention_info = "Hybrid CPU+GPU with attention"
+                    elif MODEL_TYPE in ["gpu_optimized", "fast_cnn_lstm"]:
+                        attention_info = "GPU-optimized (streamlined)"
+                    elif MODEL_TYPE == "standard":
+                        attention_info = "Standard CNN-LSTM"
+                    
+                    return stable_prediction, confidence_score, attention_info
                 
         except Exception as e:
             print(f"Prediction error: {e}")
@@ -476,9 +554,21 @@ def run_enhanced_camera():
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
     cap.set(cv2.CAP_PROP_FPS, 30)
     
+    # Adjust buffer size based on model type
+    if MODEL_TYPE == "image_based":
+        # Image-based models need fewer frames
+        buffer_size = 3
+        stability_threshold = 1
+        print("Using image-based model - faster predictions with single frames")
+    else:
+        # Video sequence models need more frames
+        buffer_size = 8
+        stability_threshold = 2
+        print("Using video sequence model - collecting frame sequences")
+    
     detector = EnhancedGestureDetector(
-        buffer_size=8,  # Reduced for faster initial predictions
-        stability_threshold=2,  # Reduced for faster predictions
+        buffer_size=buffer_size,
+        stability_threshold=stability_threshold,
         use_hand_detection=HAND_DETECTION_AVAILABLE
     )
     

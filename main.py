@@ -45,8 +45,9 @@ class SASLLauncher:
         print("\nTraining Options")
         print("=" * 30)
         print("Choose training method:")
-        print("1. GPU-Optimized Training (A10-12Q)")
-        print("2. Back to Main Menu")
+        print("1. GPU-Optimized Training (A10-12Q) - Video sequences")
+        print("2. Image-Based Training (NEW!) - Static images")
+        print("3. Back to Main Menu")
         print()
     
     def run_benchmark(self):
@@ -240,6 +241,159 @@ class SASLLauncher:
         except KeyboardInterrupt:
             print(f"\n{description} interrupted by user.")
     
+    def run_image_based_training(self):
+        """Run the new image-based training system"""
+        print("\nImage-Based SASL Training")
+        print("=" * 50)
+        print("NEW: Static Image Classification for Sign Language")
+        print("   Efficient CNN architecture optimized for A10-12Q")
+        print("   Processes single images instead of video sequences")
+        print("   Advanced data augmentation and class balancing")
+        print("   Faster training with comprehensive visualizations")
+        
+        # Check if dataset_images directory exists
+        dataset_images_dir = os.path.join(self.base_dir, "dataset_images")
+        if not os.path.exists(dataset_images_dir):
+            print(f"\nDataset directory not found: {dataset_images_dir}")
+            print("Please create the dataset_images directory with your image data")
+            print("\nRequired structure:")
+            print("   dataset_images/")
+            print("   ├── cousin/         (folder with cousin sign images)")
+            print("   ├── before/         (folder with before sign images)")
+            print("   ├── cool/           (folder with cool sign images)")
+            print("   ├── thin/           (folder with thin sign images)")
+            print("   ├── drink/          (folder with drink sign images)")
+            print("   ├── go/             (folder with go sign images)")
+            print("   └── ...")
+            print("\nEach class folder should contain multiple image files")
+            print("   Supported formats: .jpg, .jpeg, .png, .bmp")
+            return
+            
+        # Check for images in the directory
+        has_images = False
+        try:
+            for item in os.listdir(dataset_images_dir):
+                item_path = os.path.join(dataset_images_dir, item)
+                if os.path.isdir(item_path):
+                    # Check if this class folder has images
+                    image_files = []
+                    for ext in ['.jpg', '.jpeg', '.png', '.bmp']:
+                        image_files.extend([f for f in os.listdir(item_path) if f.lower().endswith(ext)])
+                    if image_files:
+                        has_images = True
+                        print(f"Found {len(image_files)} images in class '{item}'")
+        except Exception:
+            pass
+            
+        if not has_images:
+            print(f"\nNo images found in dataset_images directory")
+            print("Please add images organized by class folders")
+            print("Each class folder should contain multiple image files")
+            return
+        
+        # Get custom training parameters
+        print(f"\nTraining Configuration:")
+        
+        # Get batch size
+        while True:
+            try:
+                batch_input = input("Enter batch size (default: 32, recommended for A10-12Q): ").strip()
+                if batch_input == "":
+                    batch_size = 32
+                    break
+                else:
+                    batch_size = int(batch_input)
+                    if batch_size < 1:
+                        print("Batch size must be at least 1")
+                        continue
+                    elif batch_size > 64:
+                        print("Warning: Large batch sizes may cause memory issues on A10-12Q")
+                    break
+            except ValueError:
+                print("Please enter a valid number")
+        
+        # Get number of epochs
+        while True:
+            try:
+                epochs_input = input("Enter number of epochs (default: 50): ").strip()
+                if epochs_input == "":
+                    epochs = 50
+                    break
+                else:
+                    epochs = int(epochs_input)
+                    if epochs < 1:
+                        print("Number of epochs must be at least 1")
+                        continue
+                    elif epochs > 200:
+                        print("Warning: Very high epoch counts may lead to overfitting")
+                    break
+            except ValueError:
+                print("Please enter a valid number")
+        
+        print(f"\nFinal Configuration:")
+        print(f"   Model: SASLImageCNN (ResNet18 backbone)")
+        print(f"   Batch Size: {batch_size}")
+        print(f"   Epochs: {epochs}")
+        print(f"   Learning Rate: 0.001")
+        print(f"   Mixed Precision: Enabled for A10-12Q")
+        print(f"   Data Augmentation: Advanced pipeline")
+        print(f"   Validation Split: 20%")
+        
+        # Calculate estimated time
+        estimated_minutes = (epochs * batch_size) / 20  # Rough estimate
+        if estimated_minutes < 60:
+            time_str = f"{estimated_minutes:.0f} minutes"
+        else:
+            hours = estimated_minutes // 60
+            minutes = estimated_minutes % 60
+            time_str = f"{hours:.0f}h {minutes:.0f}m"
+        print(f"   Estimated Time: {time_str}")
+        
+        confirm = input(f"\nStart Image-Based Training with these settings? (y/n): ").strip().lower()
+        if confirm not in ['y', 'yes']:
+            return
+            
+        # Run the image training script
+        script_path = os.path.join(self.base_dir, "01_PRIMARY_SYSTEM", "image_based_training.py")
+        
+        if not os.path.exists(script_path):
+            print(f"Training script not found: {script_path}")
+            return
+            
+        try:
+            print(f"\nStarting Image-Based Training...")
+            print("=" * 60)
+            
+            # Import and run the training directly
+            import sys
+            
+            # Add the primary system directory to Python path
+            primary_system_path = os.path.join(self.base_dir, "01_PRIMARY_SYSTEM")
+            if primary_system_path not in sys.path:
+                sys.path.insert(0, primary_system_path)
+            
+            # Change to the base directory
+            original_cwd = os.getcwd()
+            os.chdir(self.base_dir)
+            
+            try:
+                # Import and run the training function directly
+                from image_based_training import train_image_model
+                train_image_model(custom_batch_size=batch_size, custom_epochs=epochs)
+                print(f"\nImage-Based Training completed successfully!")
+                print(f"Check the 05_OUTPUT_GENERATED folder for results")
+            finally:
+                # Restore original working directory
+                os.chdir(original_cwd)
+                
+        except ImportError as e:
+            print(f"Error importing training module: {e}")
+            print("Make sure the image_based_training.py file exists in 01_PRIMARY_SYSTEM/")
+        except Exception as e:
+            print(f"Image-Based Training failed with error: {e}")
+        except KeyboardInterrupt:
+            print(f"\nImage-Based Training interrupted by user")
+    
     def show_system_info(self):
         """Show system information and file structure"""
         print("\nSASL System Information")
@@ -301,9 +455,10 @@ class SASLLauncher:
         # Check available models
         available_models = []
         model_files = {
-            "gpu_optimized_sasl_model.pth": "GPU-Optimized Model (A10-12Q)",
-            "focused_sasl_model.pth": "Focused Model (6 classes)",
-            "simple_sasl_model.pth": "Simple Model"
+            "gpu_optimized_sasl_model.pth": "GPU-Optimized Model (A10-12Q) - Video sequences",
+            "simple_sasl_model.pth": "Simple Model - Video sequences",
+            "best_image_sasl_model.pth": "Image-Based Model (Best) - Static images",
+            "final_image_sasl_model.pth": "Image-Based Model (Final) - Static images"
         }
         
         print("Available models:")
@@ -425,6 +580,9 @@ if __name__ == "__main__":
                             self.run_training_with_method('cpu')  # This will actually run GPU-optimized training
                             break
                         elif train_choice == '2':
+                            self.run_image_based_training()  # New image-based training
+                            break
+                        elif train_choice == '3':
                             break  # Back to main menu
                         else:
                             print("Invalid choice. Please try again.")
