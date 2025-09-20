@@ -1,0 +1,65 @@
+# SASL-AI PyTorch Training System Requirements
+# ===========================================
+# 
+# This file contains all the Python packages required to run the 
+# South African Sign Language AI recognition system with PyTorch.
+# 
+# Installation Instructions:
+# pip install -r requirements.txt
+#
+# Or for conda environments:
+# conda install --file requirements.txt
+
+# Core Machine Learning & Deep Learning (PyTorch)
+torch>=2.0.0
+torchvision>=0.15.0
+torchaudio>=2.0.0
+timm>=0.9.0  # Modern pre-trained models including EfficientNet
+numpy>=1.24.0
+scikit-learn>=1.7.0
+
+# Computer Vision & Image Processing
+opencv-python>=4.8.0
+mediapipe>=0.10.7
+pillow>=10.0.0
+
+# Data Processing & Analysis
+pandas>=2.0.0
+scipy>=1.9.0
+
+# Progress Bars & UI
+tqdm>=4.60.0
+
+# Plotting & Visualization
+matplotlib>=3.5.0
+seaborn>=0.11.0
+
+# File & Path Management
+pathlib2>=2.3.7; python_version < "3.4"
+
+# Parallel Processing (built-in modules used)
+# multiprocessing - built into Python
+# concurrent.futures - built into Python
+
+# Standard Library Dependencies (included with Python)
+# os - built-in
+# sys - built-in  
+# json - built-in
+# time - built-in
+# datetime - built-in
+# pickle - built-in
+# subprocess - built-in
+# threading - built-in
+# collections - built-in
+
+# Optional: Additional ML/AI Tools
+# matplotlib>=3.5.0    # For plotting (if needed for analysis)
+# seaborn>=0.11.0      # For statistical plotting (if needed)
+
+# Development & Testing (optional)
+# pytest>=7.0.0        # For running tests
+# jupyter>=1.0.0       # For notebook development
+
+# GPU Support (optional - install separately if you have NVIDIA GPU)
+# tensorflow-gpu>=2.19.0    # GPU-accelerated TensorFlow
+# Note: Modern TensorFlow includes GPU support by default if CUDA is available

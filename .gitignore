@@ -1,59 +1,58 @@
-# Dataset (videos can be large)
-/dataset
+# SASL-AI Project .gitignore
 
-# Model files (can be large)
-*.pth
-*.pkl
-*.h5
+# Video dataset (large files)
+video_dataset/*
+!video_dataset/.gitkeep
 
-# Hand detection demo outputs
-hand_tracking_demo_*.mp4
-hand_regions_demo/
+# Model outputs
+outputs/*
+!outputs/.gitkeep
 
-# Python cache
+# Python
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+*$py.class
+*.so
 .Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
 
 # Virtual environments
+.env
+.venv
 env/
 venv/
 ENV/
 env.bak/
 venv.bak/
 
-# IDE files
+# IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
 
-# OS files
+# OS
 .DS_Store
 Thumbs.db
 
-# Logs
-*.log
+# Jupyter Notebooks
+.ipynb_checkpoints
 
 # Temporary files
 *.tmp
-*.temp
-
-# Output folder - ignore contents but keep folder structure
-05_OUTPUT_GENERATED/*
-!05_OUTPUT_GENERATED/
-!05_OUTPUT_GENERATED/.gitkeep
-
-# Dataset folders - ignore contents but keep folder structure
-dataset/*
-!dataset/
-!dataset/.gitkeep
-
-dataset_images/*
-!dataset_images/
-!dataset_images/.gitkeep
-
-# Charts folder - ignore contents but keep folder structure
+*.log
