@@ -155,7 +155,8 @@ class SASLCameraRecognition:
     """
     
     def __init__(self, cnn_model_path, pose_model_path, classes_path, 
-                 sequence_length=30, input_size=(224, 224), confidence_threshold=0.3):
+                 sequence_length=30, input_size=(224, 224), confidence_threshold=0.3, 
+                 show_overlays=True, minimal_ui=False):
         """
         Initialize the PyTorch-based camera recognition system
         
@@ -166,10 +167,14 @@ class SASLCameraRecognition:
             sequence_length: Number of frames for temporal modeling
             input_size: Input image size for CNN
             confidence_threshold: Minimum confidence for predictions
+            show_overlays: Whether to show MediaPipe landmarks and detailed UI
+            minimal_ui: If True, only show main prediction, no additional overlays
         """
         self.sequence_length = sequence_length
         self.input_size = input_size
         self.confidence_threshold = confidence_threshold
+        self.show_overlays = False  # Default to clean mode (no MediaPipe overlays)
+        self.minimal_ui = True      # Default to minimal/clean UI
         
         # Load class names
         with open(classes_path, 'r') as f:
@@ -185,43 +190,63 @@ class SASLCameraRecognition:
         # Load PyTorch models
         print("Loading PyTorch models...")
         
-        # CNN+LSTM Model
-        self.cnn_model = CNNLSTMModel(self.num_classes, sequence_length, input_size)
-        self.cnn_model.load_state_dict(torch.load(cnn_model_path, map_location=device))
-        self.cnn_model.to(device)
-        self.cnn_model.eval()
+        try:
+            # CNN+LSTM Model
+            print(f"Loading CNN+LSTM model from: {cnn_model_path}")
+            self.cnn_model = CNNLSTMModel(self.num_classes, sequence_length, input_size)
+            cnn_state_dict = torch.load(cnn_model_path, map_location=device)
+            self.cnn_model.load_state_dict(cnn_state_dict)
+            self.cnn_model.to(device)
+            self.cnn_model.eval()
+            print("✓ CNN+LSTM model loaded successfully")
+            
+        except Exception as e:
+            raise RuntimeError(f"Failed to load CNN+LSTM model: {e}")
         
-        # Pose LSTM Model  
-        self.pose_model = PoseLSTMModel(self.num_classes, sequence_length)
-        self.pose_model.load_state_dict(torch.load(pose_model_path, map_location=device))
-        self.pose_model.to(device)
-        self.pose_model.eval()
+        try:
+            # Pose LSTM Model  
+            print(f"Loading Pose LSTM model from: {pose_model_path}")
+            self.pose_model = PoseLSTMModel(self.num_classes, sequence_length)
+            pose_state_dict = torch.load(pose_model_path, map_location=device)
+            self.pose_model.load_state_dict(pose_state_dict)
+            self.pose_model.to(device)
+            self.pose_model.eval()
+            print("✓ Pose LSTM model loaded successfully")
+            
+        except Exception as e:
+            raise RuntimeError(f"Failed to load Pose LSTM model: {e}")
         
-        print("PyTorch models loaded successfully")
+        print("All PyTorch models loaded successfully")
         
         # Initialize MediaPipe
         print("Initializing MediaPipe...")
-        self.mp_pose = mp.solutions.pose
-        self.mp_hands = mp.solutions.hands
-        self.mp_drawing = mp.solutions.drawing_utils
-        self.mp_drawing_styles = mp.solutions.drawing_styles
-        
-        self.pose_detector = self.mp_pose.Pose(
-            static_image_mode=False,
-            model_complexity=1,
-            smooth_landmarks=True,
-            enable_segmentation=False,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5
-        )
-        
-        self.hand_detector = self.mp_hands.Hands(
-            static_image_mode=False,
-            max_num_hands=2,
-            model_complexity=1,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5
-        )
+        try:
+            self.mp_pose = mp.solutions.pose
+            self.mp_hands = mp.solutions.hands
+            self.mp_drawing = mp.solutions.drawing_utils
+            self.mp_drawing_styles = mp.solutions.drawing_styles
+            
+            self.pose_detector = self.mp_pose.Pose(
+                static_image_mode=False,
+                model_complexity=1,
+                smooth_landmarks=True,
+                enable_segmentation=False,
+                min_detection_confidence=0.5,
+                min_tracking_confidence=0.5
+            )
+            
+            self.hand_detector = self.mp_hands.Hands(
+                static_image_mode=False,
+                max_num_hands=2,
+                model_complexity=1,
+                min_detection_confidence=0.5,
+                min_tracking_confidence=0.5
+            )
+            
+            print("✓ MediaPipe initialized successfully")
+            
+        except Exception as e:
+            raise RuntimeError(f"Failed to initialize MediaPipe: {e}")
         
         # Frame buffers for temporal modeling
         self.frame_buffer = deque(maxlen=sequence_length)
@@ -338,6 +363,9 @@ class SASLCameraRecognition:
     
     def draw_landmarks(self, frame, pose_results, hand_results):
         """Draw MediaPipe landmarks on frame"""
+        if not self.show_overlays:
+            return
+            
         # Draw pose landmarks
         if pose_results.pose_landmarks:
             self.mp_drawing.draw_landmarks(
@@ -359,69 +387,147 @@ class SASLCameraRecognition:
                 )
     
     def draw_predictions(self, frame, best_prediction, best_confidence, top3_predictions):
-        """Draw prediction results on frame"""
+        """Draw prediction results on frame - continuously show top 3 predictions"""
         height, width = frame.shape[:2]
         
-        # Main prediction
-        if best_prediction and best_confidence > self.confidence_threshold:
-            # Background for main prediction
-            cv2.rectangle(frame, (10, 10), (width - 10, 80), (0, 0, 0), -1)
-            cv2.rectangle(frame, (10, 10), (width - 10, 80), (0, 255, 0), 2)
-            
-            # Main prediction text
-            main_text = f"Sign: {best_prediction}"
-            conf_text = f"Confidence: {best_confidence:.1%}"
-            
-            cv2.putText(frame, main_text, (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-            cv2.putText(frame, conf_text, (20, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-        else:
-            # No confident prediction
-            cv2.rectangle(frame, (10, 10), (width - 10, 50), (0, 0, 0), -1)
-            cv2.rectangle(frame, (10, 10), (width - 10, 50), (0, 0, 255), 2)
-            cv2.putText(frame, "No sign detected", (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        # If minimal UI mode, show compact top 3 predictions
+        if self.minimal_ui:
+            if top3_predictions:
+                # Compact display for minimal UI
+                for i, (pred, conf) in enumerate(top3_predictions):
+                    y_pos = 30 + i * 25
+                    text = f"{i+1}. {pred}: {conf:.4f}"
+                    
+                    # Color coding
+                    if i == 0:
+                        color = (0, 215, 255)    # Gold
+                    elif i == 1:
+                        color = (192, 192, 192)  # Silver
+                    else:
+                        color = (140, 120, 205)  # Bronze
+                    
+                    cv2.putText(frame, text, (20, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+            return
         
-        # Top-3 predictions
+        # Full UI mode - always show top 3 predictions continuously (regardless of confidence threshold)
         if top3_predictions:
-            y_start = 100
-            cv2.rectangle(frame, (10, y_start), (350, y_start + 120), (0, 0, 0), -1)
-            cv2.rectangle(frame, (10, y_start), (350, y_start + 120), (255, 255, 0), 2)
+            # Main predictions area - larger and more prominent
+            y_start = 20
+            prediction_height = 140
             
-            cv2.putText(frame, "Top 3 Predictions:", (20, y_start + 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            # Background for predictions
+            cv2.rectangle(frame, (10, y_start), (450, y_start + prediction_height), (0, 0, 0), -1)
+            cv2.rectangle(frame, (10, y_start), (450, y_start + prediction_height), (0, 200, 255), 2)
             
+            # Title
+            cv2.putText(frame, "SASL Sign Recognition - Top 3 Predictions:", 
+                       (20, y_start + 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            
+            # Display all 3 predictions continuously
             for i, (pred, conf) in enumerate(top3_predictions):
-                y_pos = y_start + 45 + i * 25
-                text = f"{i+1}. {pred}: {conf:.1%}"
-                color = (0, 255, 0) if i == 0 else (255, 255, 255)
-                cv2.putText(frame, text, (20, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+                y_pos = y_start + 50 + i * 30
+                
+                # Format confidence as decimal value (not percentage)
+                text = f"{i+1}. {pred}: {conf:.4f}"
+                
+                # Color coding: Gold for #1, Silver for #2, Bronze for #3
+                if i == 0:
+                    color = (0, 215, 255)    # Gold
+                    thickness = 2
+                elif i == 1:
+                    color = (192, 192, 192)  # Silver
+                    thickness = 2
+                else:
+                    color = (140, 120, 205)  # Bronze
+                    thickness = 1
+                
+                cv2.putText(frame, text, (25, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.65, color, thickness)
+                
+                # Add confidence bar visualization
+                bar_width = int(300 * conf)  # Scale confidence to bar width
+                bar_x = 25
+                bar_y = y_pos + 5
+                bar_height = 4
+                
+                # Background bar
+                cv2.rectangle(frame, (bar_x, bar_y), (bar_x + 300, bar_y + bar_height), (50, 50, 50), -1)
+                # Confidence bar
+                if bar_width > 0:
+                    cv2.rectangle(frame, (bar_x, bar_y), (bar_x + bar_width, bar_y + bar_height), color, -1)
         
-        # Instructions
-        instructions = [
-            "Instructions:",
-            "- Hold sign clearly for 1-2 seconds",
-            "- Ensure good lighting",
-            "- Press 'q' to quit, 'r' to reset"
-        ]
+        else:
+            # No predictions available yet
+            cv2.rectangle(frame, (10, 20), (450, 80), (0, 0, 0), -1)
+            cv2.rectangle(frame, (10, 20), (450, 80), (0, 0, 255), 2)
+            cv2.putText(frame, "Initializing predictions...", (20, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
         
-        y_start = height - 120
-        cv2.rectangle(frame, (10, y_start), (400, height - 10), (0, 0, 0), -1)
-        cv2.rectangle(frame, (10, y_start), (400, height - 10), (0, 255, 255), 2)
-        
-        for i, instruction in enumerate(instructions):
-            y_pos = y_start + 20 + i * 20
-            cv2.putText(frame, instruction, (20, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+        # Compact instructions at bottom
+        if not self.minimal_ui:
+            instructions = [
+                "Controls: Q=Quit | R=Reset | H=Toggle UI | O=Landmarks | C=Clean Mode"
+            ]
+            
+            y_start = height - 40
+            cv2.rectangle(frame, (10, y_start), (width - 10, height - 10), (0, 0, 0), -1)
+            cv2.rectangle(frame, (10, y_start), (width - 10, height - 10), (100, 100, 100), 1)
+            
+            for i, instruction in enumerate(instructions):
+                y_pos = y_start + 20
+                cv2.putText(frame, instruction, (20, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
     
     def run_live_recognition(self):
         """Run live camera recognition"""
         print("Starting live SASL recognition...")
-        print("Controls:")
+        print("🎯 DEFAULT MODE: Clean Mode (Minimal UI + No Overlays)")
+        print("📺 Predictions will be shown on screen AND printed to terminal")
+        print("\nControls:")
         print("  - Hold signs clearly for 1-2 seconds")
         print("  - Press 'q' to quit")
         print("  - Press 'r' to reset prediction buffer")
+        print("  - Press 'h' to toggle UI mode (Minimal/Full)")
+        print("  - Press 'o' to toggle MediaPipe overlays")
+        print("  - Press 'c' to toggle clean mode")
+        print(f"\n🖥️  Current UI Mode: {'Minimal (Clean)' if self.minimal_ui else 'Full'}")
+        print(f"👁️  MediaPipe Overlays: {'OFF (Clean)' if not self.show_overlays else 'ON'}")
         
-        cap = cv2.VideoCapture(0)
+        # Try different camera indices to find available camera
+        camera_found = False
+        cap = None
         
-        if not cap.isOpened():
-            print("ERROR: Could not open camera")
+        print("\nSearching for available cameras...")
+        for camera_index in range(5):  # Try camera indices 0-4
+            print(f"Trying camera index {camera_index}...")
+            cap = cv2.VideoCapture(camera_index)
+            
+            if cap.isOpened():
+                # Test if camera actually works by reading a frame
+                ret, test_frame = cap.read()
+                if ret and test_frame is not None:
+                    print(f"✓ Found working camera at index {camera_index}")
+                    camera_found = True
+                    break
+                else:
+                    print(f"✗ Camera {camera_index} opened but can't read frames")
+                    cap.release()
+            else:
+                print(f"✗ Camera {camera_index} failed to open")
+        
+        if not camera_found:
+            print("\n" + "="*60)
+            print("CAMERA ERROR: No working camera found!")
+            print("="*60)
+            print("Possible solutions:")
+            print("1. Check if camera is connected properly")
+            print("2. Close other applications using the camera (Teams, Zoom, etc.)")
+            print("3. Try running as administrator")
+            print("4. Check Windows camera privacy settings:")
+            print("   Settings > Privacy & Security > Camera > Allow apps to access camera")
+            print("5. Update camera drivers")
+            print("6. Try a different USB port")
+            print("7. Restart the computer")
+            print("\nCamera devices tested: indices 0-4")
+            print("="*60)
+            input("\nPress Enter to continue...")  # Don't clear screen
             return
         
         # Set camera properties
@@ -454,6 +560,14 @@ class SASLCameraRecognition:
                 
                 # Make prediction
                 best_prediction, best_confidence, top3_predictions = self.predict_sign()
+                
+                # Print predictions to terminal (every 10 frames to avoid spam)
+                if top3_predictions and fps_counter % 10 == 0:
+                    print(f"\n--- SASL Predictions (Frame {fps_counter}) ---")
+                    for i, (pred, conf) in enumerate(top3_predictions):
+                        rank_icon = ["🥇", "🥈", "🥉"][i]
+                        print(f"{rank_icon} {i+1}. {pred}: {conf:.4f}")
+                    print("-" * 45)
                 
                 # Smooth prediction
                 if best_prediction:
@@ -489,6 +603,21 @@ class SASLCameraRecognition:
                     self.pose_buffer.clear()
                     self.prediction_buffer.clear()
                     print("Buffers reset")
+                elif key == ord('h'):
+                    # Toggle UI mode
+                    self.minimal_ui = not self.minimal_ui
+                    mode = "Minimal" if self.minimal_ui else "Full"
+                    print(f"UI mode switched to: {mode}")
+                elif key == ord('o'):
+                    # Toggle overlays (landmarks)
+                    self.show_overlays = not self.show_overlays
+                    status = "ON" if self.show_overlays else "OFF"
+                    print(f"MediaPipe overlays: {status}")
+                elif key == ord('c'):
+                    # Clean mode - no overlays, minimal UI
+                    self.show_overlays = False
+                    self.minimal_ui = True
+                    print("Clean mode activated - minimal UI, no overlays")
         
         except KeyboardInterrupt:
             print("\nRecognition stopped by user")
