@@ -20,6 +20,8 @@ import torch.nn as nn
 import cv2
 import numpy as np
 import json
+import torch
+import torch.nn as nn
 import mediapipe as mp
 from pathlib import Path
 import time
@@ -198,7 +200,7 @@ class SASLCameraRecognition:
             self.cnn_model.load_state_dict(cnn_state_dict)
             self.cnn_model.to(device)
             self.cnn_model.eval()
-            print("✓ CNN+LSTM model loaded successfully")
+            print("CNN+LSTM model loaded successfully")
             
         except Exception as e:
             raise RuntimeError(f"Failed to load CNN+LSTM model: {e}")
@@ -211,7 +213,7 @@ class SASLCameraRecognition:
             self.pose_model.load_state_dict(pose_state_dict)
             self.pose_model.to(device)
             self.pose_model.eval()
-            print("✓ Pose LSTM model loaded successfully")
+            print("Pose LSTM model loaded successfully")
             
         except Exception as e:
             raise RuntimeError(f"Failed to load Pose LSTM model: {e}")
@@ -243,7 +245,7 @@ class SASLCameraRecognition:
                 min_tracking_confidence=0.5
             )
             
-            print("✓ MediaPipe initialized successfully")
+            print("MediaPipe initialized successfully")
             
         except Exception as e:
             raise RuntimeError(f"Failed to initialize MediaPipe: {e}")
@@ -478,8 +480,8 @@ class SASLCameraRecognition:
     def run_live_recognition(self):
         """Run live camera recognition"""
         print("Starting live SASL recognition...")
-        print("🎯 DEFAULT MODE: Clean Mode (Minimal UI + No Overlays)")
-        print("📺 Predictions will be shown on screen AND printed to terminal")
+        print("DEFAULT MODE: Clean Mode (Minimal UI + No Overlays)")
+        print("Predictions will be shown on screen AND printed to terminal")
         print("\nControls:")
         print("  - Hold signs clearly for 1-2 seconds")
         print("  - Press 'q' to quit")
@@ -487,8 +489,8 @@ class SASLCameraRecognition:
         print("  - Press 'h' to toggle UI mode (Minimal/Full)")
         print("  - Press 'o' to toggle MediaPipe overlays")
         print("  - Press 'c' to toggle clean mode")
-        print(f"\n🖥️  Current UI Mode: {'Minimal (Clean)' if self.minimal_ui else 'Full'}")
-        print(f"👁️  MediaPipe Overlays: {'OFF (Clean)' if not self.show_overlays else 'ON'}")
+        print(f"\nCurrent UI Mode: {'Minimal (Clean)' if self.minimal_ui else 'Full'}")
+        print(f"MediaPipe Overlays: {'OFF (Clean)' if not self.show_overlays else 'ON'}")
         
         # Try different camera indices to find available camera
         camera_found = False
@@ -503,14 +505,14 @@ class SASLCameraRecognition:
                 # Test if camera actually works by reading a frame
                 ret, test_frame = cap.read()
                 if ret and test_frame is not None:
-                    print(f"✓ Found working camera at index {camera_index}")
+                    print(f"Found working camera at index {camera_index}")
                     camera_found = True
                     break
                 else:
-                    print(f"✗ Camera {camera_index} opened but can't read frames")
+                    print(f"Camera {camera_index} opened but can't read frames")
                     cap.release()
             else:
-                print(f"✗ Camera {camera_index} failed to open")
+                print(f"Camera {camera_index} failed to open")
         
         if not camera_found:
             print("\n" + "="*60)
@@ -565,8 +567,8 @@ class SASLCameraRecognition:
                 if top3_predictions and fps_counter % 10 == 0:
                     print(f"\n--- SASL Predictions (Frame {fps_counter}) ---")
                     for i, (pred, conf) in enumerate(top3_predictions):
-                        rank_icon = ["🥇", "🥈", "🥉"][i]
-                        print(f"{rank_icon} {i+1}. {pred}: {conf:.4f}")
+                        rank_number = f"{i+1}."
+                        print(f"{rank_number} {pred}: {conf:.4f}")
                     print("-" * 45)
                 
                 # Smooth prediction
@@ -631,7 +633,7 @@ class SASLCameraRecognition:
 
 def main():
     """Main function for testing"""
-    print("🔍 Searching for trained PyTorch models...")
+    print("Searching for trained PyTorch models...")
     
     # Check for the latest training outputs
     outputs_dir = Path("outputs")
@@ -643,7 +645,7 @@ def main():
         if training_dirs:
             # Sort by name (timestamp) and get the latest
             latest_training_dir = sorted(training_dirs, key=lambda x: x.name)[-1]
-            print(f"📁 Found latest training session: {latest_training_dir.name}")
+            print(f"Found latest training session: {latest_training_dir.name}")
             
             # Check for models in the latest training directory
             models_dir = latest_training_dir / "models"
@@ -660,19 +662,19 @@ def main():
                 
                 if cnn_model_path.exists() and pose_model_path.exists() and classes_path.exists():
                     model_files = [str(cnn_model_path), str(pose_model_path), str(classes_path)]
-                    print(f"✅ Found CNN+LSTM model: {cnn_model_path}")
-                    print(f"✅ Found Pose LSTM model: {pose_model_path}")
-                    print(f"✅ Found class names: {classes_path}")
+                    print(f"Found CNN+LSTM model: {cnn_model_path}")
+                    print(f"Found Pose LSTM model: {pose_model_path}")
+                    print(f"Found class names: {classes_path}")
                 else:
-                    print(f"❌ Missing model files in {models_dir}")
+                    print(f"Missing model files in {models_dir}")
             else:
-                print(f"❌ Models or results directory not found in {latest_training_dir}")
+                print(f"Models or results directory not found in {latest_training_dir}")
         else:
-            print("❌ No training directories found in outputs/")
+            print("No training directories found in outputs/")
     
     # Fallback: Check for models in root directory or outputs/
     if not model_files:
-        print("🔍 Checking for models in root directory...")
+        print("Checking for models in root directory...")
         fallback_files = [
             "best_sasl_cnn_lstm_model.pth",
             "best_sasl_pose_lstm_model.pth", 
@@ -691,26 +693,26 @@ def main():
         # Check if all files found
         if None in model_files:
             missing_files = [f for f, path in zip(fallback_files, model_files) if path is None]
-            print(f"❌ ERROR: Missing PyTorch model files: {missing_files}")
-            print("\n🔧 To fix this issue:")
+            print(f"ERROR: Missing PyTorch model files: {missing_files}")
+            print("\nTo fix this issue:")
             print("1. Run training first: python video_based_sasl_training.py")
             print("2. Or collect training data: python sasl_video_collector.py")
             print("3. Make sure training completes successfully")
             return
         else:
-            print("✅ Found models in fallback locations")
+            print("Found models in fallback locations")
     
     if not model_files or len(model_files) != 3:
-        print("❌ ERROR: Could not locate all required model files")
-        print("\n🔧 To fix this issue:")
+        print("ERROR: Could not locate all required model files")
+        print("\nTo fix this issue:")
         print("1. Run training first: python video_based_sasl_training.py") 
         print("2. Or collect training data: python sasl_video_collector.py")
         print("3. Make sure training completes successfully")
         return
     
     try:
-        print("\n🚀 Starting SASL Camera Recognition System...")
-        print("📹 Initializing camera and loading models...")
+        print("\nStarting SASL Camera Recognition System...")
+        print("Initializing camera and loading models...")
         
         # Initialize and run recognition
         recognition = SASLCameraRecognition(
@@ -719,21 +721,21 @@ def main():
             classes_path=model_files[2]
         )
         
-        print("✅ Models loaded successfully!")
-        print("🎯 Starting live recognition...")
-        print("\n⌨️  Controls:")
+        print("Models loaded successfully!")
+        print("Starting live recognition...")
+        print("\nControls:")
         print("   SPACE = Toggle predictions on/off")
         print("   ESC/Q = Quit")
         print("   C = Toggle confidence display")
-        print("\n📺 Camera window will open shortly...")
+        print("\nCamera window will open shortly...")
         
         recognition.run_live_recognition()
         
     except FileNotFoundError as e:
-        print(f"❌ ERROR: Model file not found: {e}")
-        print("🔧 Please check that all model files exist and are accessible")
+        print(f"ERROR: Model file not found: {e}")
+        print("Please check that all model files exist and are accessible")
     except Exception as e:
-        print(f"❌ ERROR during recognition: {e}")
+        print(f"ERROR during recognition: {e}")
         import traceback
         traceback.print_exc()
 
