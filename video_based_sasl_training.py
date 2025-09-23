@@ -53,7 +53,7 @@ if torch.cuda.is_available():
     print(f"GPU: {torch.cuda.get_device_name(0)}")
     print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
 else:
-    print("💻 Using CPU - Consider GPU for faster training")
+    print("Using CPU - Consider GPU for faster training")
 
 # Set seeds for reproducibility
 torch.manual_seed(42)
@@ -532,7 +532,7 @@ class VideoSASLTrainer:
         self.num_classes = len(class_names)
         self.class_names = class_names
         
-        print(f"\n⚡ Processing {len(all_video_tasks)} videos with {self.num_workers} workers...")
+        print(f"\nProcessing {len(all_video_tasks)} videos with {self.num_workers} workers...")
         
         video_sequences = []
         pose_sequences = []
@@ -544,7 +544,7 @@ class VideoSASLTrainer:
         with ProcessPoolExecutor(max_workers=self.num_workers) as executor:
             futures = {executor.submit(process_single_video, task): task for task in all_video_tasks}
             
-            with tqdm(total=len(all_video_tasks), desc="📹 Processing videos", 
+            with tqdm(total=len(all_video_tasks), desc="Processing videos", 
                      bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]") as pbar:
                 
                 for future in as_completed(futures):
@@ -1123,10 +1123,10 @@ class VideoSASLTrainer:
         print(f"  Pose LSTM Accuracy: {best_pose_acc:.1f}%")
         print(f"  Ensemble Accuracy: {training_results['ensemble_accuracy']:.1f}%")
         print(f"\nOutput Directory: {self.output_dir}")
-        print(f"  📁 Models: {self.output_dir / 'models'}")
-        print(f"  📊 Plots: {self.output_dir / 'plots'}")
-        print(f"  🔍 Confusion Matrices: {self.output_dir / 'confusion_matrices'}")
-        print(f"  📋 Results: {self.output_dir / 'results'}")
+        print(f"  Models: {self.output_dir / 'models'}")
+        print(f"  Plots: {self.output_dir / 'plots'}")
+        print(f"  Confusion Matrices: {self.output_dir / 'confusion_matrices'}")
+        print(f"  Results: {self.output_dir / 'results'}")
         
         return cnn_lstm_model, pose_lstm_model
 

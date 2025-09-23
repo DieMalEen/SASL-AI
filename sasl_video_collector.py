@@ -46,7 +46,7 @@ class SASLVideoCollector:
         # Background removal settings
         self.background_removal = background_removal
         self.bg_removal_method = bg_removal_method
-        self.background_color = (0, 255, 0)  # Green screen default
+        self.background_color = (0, 255, 0)
         
         # Create dataset directory
         self.dataset_path.mkdir(exist_ok=True)
@@ -208,7 +208,7 @@ class SASLVideoCollector:
                     quality_score += 5
                     feedback.append("GOOD: Hand articulation")
         else:
-            feedback.append("ERROR: No hands detected")
+            feedback.append("WARNING: No hands detected")
         
         # Pose detection quality (up to 25 points)
         if pose_results.pose_landmarks:
@@ -222,7 +222,7 @@ class SASLVideoCollector:
                 quality_score += 10
                 feedback.append("GOOD: Upper body visible")
         else:
-            feedback.append("ERROR: No body pose detected")
+            feedback.append("WARNING: No body pose detected")
         
         # Lighting and contrast (up to 15 points)
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -507,7 +507,7 @@ class SASLVideoCollector:
     
     def collect_class_videos(self, class_name, target_count=10):
         """
-        Collect multiple videos for a specific SASL class
+        Collect multiple videos for a specific SASL class - continuous recording session
         """
         class_dir = self.dataset_path / class_name
         class_dir.mkdir(exist_ok=True)
@@ -527,38 +527,239 @@ class SASLVideoCollector:
             print(f"Target already reached for '{class_name}'!")
             return existing_count
         
-        # Record new videos
-        video_number = existing_count + 1
-        recorded_count = 0
-        
-        while existing_count + recorded_count < target_count:
-            print(f"\nPreparing to record video {video_number} of {target_count}")
-            
-            success = self.record_video_sequence(class_name, video_number)
-            
-            if success:
-                recorded_count += 1
-                video_number += 1
-                print(f"Progress: {existing_count + recorded_count}/{target_count} videos")
-                
-                # Check if user wants to continue
-                if existing_count + recorded_count < target_count:
-                    print(f"\nVideo {existing_count + recorded_count}/{target_count} recorded successfully!")
-                    continue_choice = input("Continue recording? (y/n/q): ").strip().lower()
-                    if continue_choice in ['n', 'no']:
-                        print("Recording session ended by user")
-                        break
-                    elif continue_choice in ['q', 'quit']:
-                        print("Quitting video collection")
-                        break
-                    # Default 'y' or any other key continues
-            else:
-                print("Recording failed or cancelled - ending session")
-                break
+        # Start continuous recording session
+        videos_needed = target_count - existing_count
+        recorded_count = self.record_continuous_session(class_name, existing_count + 1, videos_needed)
         
         final_count = existing_count + recorded_count
         print(f"\nFinal count for '{class_name}': {final_count} videos")
         return final_count
+    
+    def record_continuous_session(self, class_name, start_video_number, videos_needed):
+        """
+        Record multiple videos in a single continuous camera session
+        """
+        class_dir = self.dataset_path / class_name
+        
+        # Initialize camera once
+        cap = cv2.VideoCapture(0)
+        if not cap.isOpened():
+            print("Error: Could not open camera")
+            return 0
+        
+        # Set camera properties
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        cap.set(cv2.CAP_PROP_FPS, self.fps)
+        
+        # Get actual camera properties
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        actual_fps = cap.get(cv2.CAP_PROP_FPS)
+        
+        print(f"\nContinuous recording session started:")
+        print(f"  Class: {class_name}")
+        print(f"  Videos to record: {videos_needed}")
+        print(f"  Resolution: {width}x{height}")
+        print(f"  FPS: {actual_fps}")
+        
+        # Session state
+        current_video_number = start_video_number
+        videos_recorded = 0
+        session_active = True
+        
+        # Recording states
+        WAITING = 0
+        RECORDING = 1
+        COMPLETED = 2
+        
+        state = WAITING
+        recording_start = None
+        frames_recorded = 0
+        out = None
+        current_filepath = None
+        
+        print("\nContinuous Session Controls:")
+        print("  SPACE - Start/Stop recording")
+        print("  'n' - Skip to next video (after recording)")
+        print("  'q' or ESC - End session and close window")
+        print("  's' - Skip current video without recording")
+        print("  'r' - Restart current recording")
+        if self.background_removal:
+            print("  'b' - Toggle background removal method")
+            print("  'c' - Change background color (for solid color mode)")
+            print(f"  Current background method: {self.bg_removal_method}")
+        
+        while session_active and videos_recorded < videos_needed:
+            ret, frame = cap.read()
+            if not ret:
+                print("Error reading frame")
+                break
+            
+            # Flip for mirror effect
+            frame = cv2.flip(frame, 1)
+            
+            # Apply background removal if enabled
+            if self.background_removal:
+                processed_frame = self.apply_background_removal(frame)
+                # For transparency mode, convert back to BGR for display/saving
+                if self.bg_removal_method == "transparent" and processed_frame.shape[2] == 4:
+                    display_frame = cv2.cvtColor(processed_frame, cv2.COLOR_BGRA2BGR)
+                else:
+                    display_frame = processed_frame.copy()
+            else:
+                display_frame = frame.copy()
+                processed_frame = frame.copy()
+            
+            # Check quality using original frame
+            quality_score, feedback = self.check_sign_quality(frame)
+            current_time = time.time()
+            
+            # State machine for continuous recording
+            if state == WAITING:
+                # Setup for current video
+                if out is None:
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    filename = f"{class_name}_{current_video_number:03d}_{timestamp}.mp4"
+                    current_filepath = class_dir / filename
+                    
+                    # Create video writer
+                    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                    out = cv2.VideoWriter(str(current_filepath), fourcc, actual_fps, (width, height))
+                
+                display_frame = self.draw_recording_overlay(display_frame, False, None, quality_score, feedback)
+                
+                # Show current video info
+                session_info = f"Video {current_video_number} of {start_video_number + videos_needed - 1} ({videos_recorded + 1}/{videos_needed})"
+                cv2.putText(display_frame, session_info, (20, height - 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                cv2.putText(display_frame, f"Class: {class_name}", (20, height - 90), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                
+                if self.background_removal:
+                    cv2.putText(display_frame, f"Background: {self.bg_removal_method.title()}", 
+                               (20, height - 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+                
+                cv2.putText(display_frame, "READY - Press SPACE to start recording", 
+                           (20, height - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            
+            elif state == RECORDING:
+                elapsed = current_time - recording_start
+                
+                # Clean recording mode - no overlays
+                display_frame = self.draw_recording_overlay(display_frame, True, None, quality_score, feedback, clean_recording=True)
+                
+                # Write processed frame to video
+                if self.bg_removal_method == "transparent":
+                    save_frame = cv2.cvtColor(processed_frame, cv2.COLOR_BGRA2BGR) if processed_frame.shape[2] == 4 else processed_frame
+                else:
+                    save_frame = processed_frame
+                    
+                out.write(save_frame)
+                frames_recorded += 1
+            
+            elif state == COMPLETED:
+                # Show completion message
+                cv2.putText(display_frame, f"Video {current_video_number} Completed!", 
+                           (width//2 - 150, height//2 - 20), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+                
+                remaining = videos_needed - videos_recorded
+                if remaining > 0:
+                    cv2.putText(display_frame, f"Videos remaining: {remaining}", 
+                               (width//2 - 100, height//2 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+                    cv2.putText(display_frame, "Press 'n' for next video or 'q' to quit", 
+                               (width//2 - 180, height//2 + 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                else:
+                    cv2.putText(display_frame, "All videos completed! Press any key to finish", 
+                               (width//2 - 220, height//2 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            
+            cv2.imshow(f'SASL Continuous Recording - {class_name}', display_frame)
+            
+            key = cv2.waitKey(1) & 0xFF
+            
+            # Handle key presses based on state
+            if state == WAITING:
+                if key == ord(' '):
+                    # Start recording
+                    state = RECORDING
+                    recording_start = current_time
+                    frames_recorded = 0
+                    print(f"Recording video {current_video_number}... Press SPACE to stop.")
+                elif key == ord('s'):
+                    # Skip this video
+                    print(f"Skipping video {current_video_number}")
+                    if out:
+                        out.release()
+                        out = None
+                    if current_filepath and current_filepath.exists():
+                        current_filepath.unlink()
+                    current_video_number += 1
+                    videos_recorded += 1  # Count as "completed" to move on
+                elif key == ord('b') and self.background_removal:
+                    new_method = self.toggle_background_removal_method()
+                    print(f"Background removal method: {new_method}")
+                elif key == ord('c') and self.background_removal and self.bg_removal_method == "solid_color":
+                    colors = [(0, 255, 0), (255, 0, 0), (0, 0, 255), (255, 255, 0), (255, 0, 255), (0, 255, 255), (0, 0, 0), (255, 255, 255)]
+                    color_names = ["Green", "Blue", "Red", "Yellow", "Magenta", "Cyan", "Black", "White"]
+                    try:
+                        current_idx = colors.index(tuple(self.background_color))
+                        next_idx = (current_idx + 1) % len(colors)
+                    except ValueError:
+                        next_idx = 0
+                    self.set_background_color(colors[next_idx])
+                    print(f"Background color: {color_names[next_idx]}")
+            
+            elif state == RECORDING:
+                if key == ord(' '):
+                    # Stop recording
+                    state = COMPLETED
+                    elapsed = current_time - recording_start
+                    print(f"Video {current_video_number} completed! ({frames_recorded} frames, {elapsed:.1f}s)")
+                elif key == ord('r'):
+                    # Restart recording
+                    state = WAITING
+                    if out:
+                        out.release()
+                        out = None
+                    if current_filepath and current_filepath.exists():
+                        current_filepath.unlink()
+                    print(f"Recording restarted for video {current_video_number}")
+            
+            elif state == COMPLETED:
+                if key == ord('n') or (key != 255 and videos_recorded >= videos_needed - 1):
+                    # Move to next video or finish
+                    if out:
+                        out.release()
+                        out = None
+                    
+                    videos_recorded += 1
+                    current_video_number += 1
+                    
+                    if videos_recorded < videos_needed:
+                        # Prepare for next video
+                        state = WAITING
+                        print(f"Ready for video {current_video_number} ({videos_recorded + 1}/{videos_needed})")
+                    else:
+                        # All videos completed
+                        session_active = False
+                        print("All videos completed!")
+            
+            # Global quit commands
+            if key == ord('q') or key == 27:  # 'q' or ESC
+                print("Session ended by user")
+                if out:
+                    out.release()
+                if current_filepath and current_filepath.exists() and state != COMPLETED:
+                    current_filepath.unlink()
+                    print("Incomplete recording deleted")
+                session_active = False
+        
+        # Cleanup
+        cap.release()
+        if out:
+            out.release()
+        cv2.destroyAllWindows()
+        
+        print(f"Recording session completed: {videos_recorded} videos recorded")
+        return videos_recorded
     
     def interactive_menu(self):
         """
@@ -618,7 +819,7 @@ class SASLVideoCollector:
             choice = int(input(f"\nSelect class (1-{len(self.existing_classes)}): "))
             if 1 <= choice <= len(self.existing_classes):
                 class_name = self.existing_classes[choice - 1]
-                target = int(input(f"Target number of videos for '{class_name}' (default 15): ") or "15")
+                target = int(input(f"Target number of videos for '{class_name}' (default 30): ") or "30")
                 self.collect_class_videos(class_name, target)
             else:
                 print("Invalid selection!")
@@ -635,8 +836,8 @@ class SASLVideoCollector:
         if class_name in self.existing_classes:
             print(f"Class '{class_name}' already exists!")
             return
-        
-        target = int(input(f"Target number of videos for '{class_name}' (default 15): ") or "15")
+
+        target = int(input(f"Target number of videos for '{class_name}' (default 30): ") or "30")
         final_count = self.collect_class_videos(class_name, target)
         
         if final_count > 0:
@@ -649,9 +850,9 @@ class SASLVideoCollector:
         if not self.existing_classes:
             print("No existing classes found!")
             return
-        
-        target = int(input("Target videos per class (default 15): ") or "15")
-        
+
+        target = int(input("Target videos per class (default 30): ") or "30")
+
         for class_name in self.existing_classes:
             current_count = len(list((self.dataset_path / class_name).glob("*.mp4")))
             if current_count < target:
@@ -822,13 +1023,13 @@ def main():
     )
     
     if background_removal:
-        print(f"\n✅ Background removal enabled with '{bg_method}' method")
+        print(f"\nBackground removal enabled with '{bg_method}' method")
         print("During recording:")
         print("  - Press 'b' to switch between removal methods")
         print("  - Press 'c' to change background color (solid color mode)")
         print("  - Background removal helps models focus on sign language gestures")
     else:
-        print("\n❌ Background removal disabled - recording with original background")
+        print("\nBackground removal disabled - recording with original background")
     
     # Run interactive menu
     collector.interactive_menu()

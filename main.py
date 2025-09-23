@@ -290,21 +290,15 @@ def train_models():
     
     print(f"\nReady to train video-based SASL models!")
     print(f"This will create:")
-    print(f"   • CNN+LSTM model (visual features + temporal modeling)")
-    print(f"   • Pose LSTM model (MediaPipe landmarks + temporal modeling)")
-    print(f"   • Ensemble predictions combining both models")
+    print(f"   - CNN+LSTM model (visual features + temporal modeling)")
+    print(f"   - Pose LSTM model (MediaPipe landmarks + temporal modeling)")
+    print(f"   - Ensemble predictions combining both models")
     
     expected_dataset_size = stats['total_videos'] * (1 + config['augmentation_factor'])
     print(f"\nDataset size after augmentation: {expected_dataset_size} videos")
     
     estimated_time = config['epochs'] * (2 + config['augmentation_factor']) * 0.5
     print(f"Estimated training time: {estimated_time:.0f}-{estimated_time*2:.0f} minutes")
-    
-    print(f"\nPress Enter to start training or 'q' to return to menu...")
-    
-    choice = input().strip().lower()
-    if choice == 'q':
-        return
     
     try:
         # Ensure outputs directory exists
@@ -366,27 +360,82 @@ def live_camera_recognition():
     print(" Live SASL Camera Recognition")
     print("=" * 50)
     
-    # Check if trained models exist
+    # Use the same model detection logic as sasl_camera_recognition.py
     outputs_dir = Path("outputs")
-    cnn_model_path = outputs_dir / "best_sasl_cnn_lstm_model.pth"
-    pose_model_path = outputs_dir / "best_sasl_pose_lstm_model.pth"
-    classes_path = outputs_dir / "pytorch_sasl_classes.json"
+    model_files = []
     
-    # Also check in root directory (backwards compatibility)
-    if not cnn_model_path.exists():
-        cnn_model_path = Path("best_sasl_cnn_lstm_model.pth")
-    if not pose_model_path.exists():
-        pose_model_path = Path("best_sasl_pose_lstm_model.pth")
-    if not classes_path.exists():
-        classes_path = Path("pytorch_sasl_classes.json")
+    if outputs_dir.exists():
+        # Find the latest training directory
+        training_dirs = [d for d in outputs_dir.iterdir() if d.is_dir() and d.name.startswith("training_")]
+        if training_dirs:
+            # Sort by name (timestamp) and get the latest
+            latest_training_dir = sorted(training_dirs, key=lambda x: x.name)[-1]
+            print(f"Found latest training session: {latest_training_dir.name}")
+            
+            # Check for models in the latest training directory
+            models_dir = latest_training_dir / "models"
+            results_dir = latest_training_dir / "results"
+            
+            if models_dir.exists() and results_dir.exists():
+                cnn_model_path = models_dir / "best_sasl_cnn_lstm_model.pth"
+                pose_model_path = models_dir / "best_sasl_pose_lstm_model.pth"
+                
+                # Check for class names - try both pytorch_sasl_classes.json and class_names.json
+                classes_path = results_dir / "pytorch_sasl_classes.json"
+                if not classes_path.exists():
+                    classes_path = results_dir / "class_names.json"
+                
+                if cnn_model_path.exists() and pose_model_path.exists() and classes_path.exists():
+                    model_files = [str(cnn_model_path), str(pose_model_path), str(classes_path)]
+                    print(f"Found CNN+LSTM model: {cnn_model_path.name}")
+                    print(f"Found Pose LSTM model: {pose_model_path.name}")
+                    print(f"Found class names: {classes_path.name}")
+                else:
+                    print(f"Missing model files in {models_dir}")
+            else:
+                print(f"Models or results directory not found in {latest_training_dir}")
+        else:
+            print("No training directories found in outputs/")
     
-    if not (cnn_model_path.exists() and pose_model_path.exists() and classes_path.exists()):
-        print("ERROR: No trained models found!")
+    # Fallback: Check for models in root directory or outputs/
+    if not model_files:
+        print("Checking for models in root directory...")
+        fallback_files = [
+            "best_sasl_cnn_lstm_model.pth",
+            "best_sasl_pose_lstm_model.pth", 
+            "pytorch_sasl_classes.json"
+        ]
+        
+        # Check outputs directory first, then root
+        for model_file in fallback_files:
+            if (outputs_dir / model_file).exists():
+                model_files.append(str(outputs_dir / model_file))
+            elif Path(model_file).exists():
+                model_files.append(model_file)
+            else:
+                model_files.append(None)
+        
+        # Check if all files found
+        if None in model_files:
+            missing_files = [f for f, path in zip(fallback_files, model_files) if path is None]
+            print(f"ERROR: Missing PyTorch model files: {missing_files}")
+            print("\nTo fix this issue:")
+            print("1. Run training first using option 2")
+            print("2. Make sure training completes successfully")
+            print("3. Check that model files are in outputs/training_*/models/")
+            input("Press Enter to continue...")
+            return
+    
+    if not model_files or len(model_files) != 3:
+        print("ERROR: Could not locate all required model files")
         print("Please train models first using option 2.")
         input("Press Enter to continue...")
         return
     
     try:
+        # model_files contains [cnn_path, pose_path, classes_path]
+        cnn_model_path, pose_model_path, classes_path = model_files
+        
         with open(classes_path, 'r') as f:
             classes = json.load(f)
         
@@ -394,14 +443,15 @@ def live_camera_recognition():
         for i, class_name in enumerate(classes, 1):
             print(f"   {i:2d}. {class_name}")
         
-        print(f"\n Starting live camera recognition...")
+        print(f"\nStarting live camera recognition...")
         print(f"Controls:")
-        print(f"   • Hold still and sign clearly")
-        print(f"   • Press 'q' to quit")
-        print(f"   • Press 'r' to reset prediction buffer")
+        print(f"   - Hold still and sign clearly")
+        print(f"   - Press 'q' to quit")
+        print(f"   - Press 'r' to reset prediction buffer")
+        print(f"   - Press 'u' to toggle UI overlay")
+        print(f"   - Press 'm' to toggle MediaPipe landmarks")
         
-        input("Press Enter to start camera or 'q' to return to menu...")
-        choice = input().strip().lower()
+        choice = input("Press Enter to start camera or 'q' to return to menu...").strip().lower()
         if choice == 'q':
             return
         
@@ -409,9 +459,9 @@ def live_camera_recognition():
         from sasl_camera_recognition import SASLCameraRecognition
         
         camera = SASLCameraRecognition(
-            cnn_model_path=str(cnn_model_path),
-            pose_model_path=str(pose_model_path),
-            classes_path=str(classes_path)
+            cnn_model_path=cnn_model_path,
+            pose_model_path=pose_model_path,
+            classes_path=classes_path
         )
         
         camera.run_live_recognition()
@@ -594,98 +644,10 @@ def show_system_info():
     
     input(f"\nPress Enter to continue...")
 
-def create_gitignore():
-    """Create or update .gitignore file"""
-    gitignore_content = """# SASL-AI Project .gitignore
-
-# Video dataset (large files)
-video_dataset/
-*.mp4
-*.avi
-*.mov
-*.mkv
-*.wmv
-
-# Model outputs
-outputs/
-*.h5
-*.json
-
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
-
-# Virtual environments
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Jupyter Notebooks
-.ipynb_checkpoints
-
-# Temporary files
-*.tmp
-*.log
-"""
-    
-    gitignore_path = Path(".gitignore")
-    
-    if gitignore_path.exists():
-        # Check if our content is already there
-        with open(gitignore_path, 'r') as f:
-            existing_content = f.read()
-        
-        if "# SASL-AI Project" not in existing_content:
-            # Append our content
-            with open(gitignore_path, 'a') as f:
-                f.write("\n" + gitignore_content)
-            print("UPDATED: existing .gitignore")
-        else:
-            print("INFO: .gitignore already configured for SASL-AI")
-    else:
-        # Create new .gitignore
-        with open(gitignore_path, 'w') as f:
-            f.write(gitignore_content)
-        print("CREATED: new .gitignore file")
-
 def main():
     """Main menu loop"""
     # Setup
     Path("outputs").mkdir(exist_ok=True)
-    create_gitignore()
     
     if not check_dependencies():
         print("\nERROR: Please install required dependencies before continuing.")
