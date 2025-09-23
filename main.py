@@ -32,27 +32,18 @@ def print_banner():
     print("=" * 70)
 
 def check_dependencies():
-    """Check if required dependencies are available - lightweight version"""
-    # Skip heavy dependency checking at startup for speed
-    # Dependencies will be checked when actually needed by each module
-    return True
-
-def check_dependencies_verbose():
-    """Check if required dependencies are available with full verification"""
+    """Check if required dependencies are available"""
     required_modules = ['cv2', 'torch', 'mediapipe', 'numpy', 'sklearn', 'timm']
     missing_modules = []
     
-    print("Checking dependencies...")
     for module in required_modules:
         try:
             __import__(module)
-            print(f"  ✓ {module}")
         except ImportError:
             missing_modules.append(module)
-            print(f"  ✗ {module}")
     
     if missing_modules:
-        print(f"\n!!! Missing required modules: {', '.join(missing_modules)}")
+        print(f"!!! Missing required modules: {', '.join(missing_modules)}")
         print("Please install them using:")
         print("pip install torch torchvision torchaudio opencv-python mediapipe numpy scikit-learn timm")
         return False
@@ -79,56 +70,20 @@ def get_dataset_stats():
             video_files = len(list(class_dir.glob("*.mp4")))
             stats['total_videos'] += video_files
     
-    # Check for trained models - updated for PyTorch and timestamped directories
-    model_files = []
-    
-    # Check in timestamped training directories first
-    if outputs_path.exists():
-        training_dirs = [d for d in outputs_path.iterdir() if d.is_dir() and d.name.startswith("training_")]
-        for training_dir in training_dirs:
-            models_dir = training_dir / "models"
-            if models_dir.exists():
-                model_files.extend(list(models_dir.glob("*.pth")))
-    
-    # Fallback: check outputs/ and root for .pth files
-    if outputs_path.exists():
-        model_files.extend(list(outputs_path.glob("*.pth")))
-    model_files.extend(list(Path(".").glob("*.pth")))
-    
+    # Check for trained models
+    model_files = list(Path(".").glob("*.h5")) + list(outputs_path.glob("*.h5") if outputs_path.exists() else [])
     stats['trained_models'] = len(model_files)
     
-    # Check last training - updated for timestamped directories
-    last_training = 'Never'
-    
-    # First check training directories for latest results
-    if outputs_path.exists():
-        training_dirs = [d for d in outputs_path.iterdir() if d.is_dir() and d.name.startswith("training_")]
-        if training_dirs:
-            # Get the latest training directory
-            latest_training_dir = sorted(training_dirs, key=lambda x: x.name)[-1]
-            
-            # Extract date from directory name: training_YYYYMMDD_HHMMSS
-            try:
-                dir_name = latest_training_dir.name  # training_YYYYMMDD_HHMMSS
-                date_part = dir_name.replace('training_', '').split('_')[0]  # YYYYMMDD
-                # Convert YYYYMMDD to YYYY-MM-DD
-                last_training = f"{date_part[:4]}-{date_part[4:6]}-{date_part[6:8]}"
-            except:
-                last_training = 'Recent'
-    
-    # Fallback: check old results file
-    if last_training == 'Never':
-        results_file = outputs_path / "video_sasl_results.json" if outputs_path.exists() else Path("video_sasl_results.json")
-        if results_file.exists():
-            try:
-                with open(results_file, 'r') as f:
-                    results = json.load(f)
-                    if 'training_date' in results:
-                        last_training = results['training_date'][:10]  # Just the date part
-            except:
-                pass
-    
-    stats['last_training'] = last_training
+    # Check last training
+    results_file = outputs_path / "video_sasl_results.json" if outputs_path.exists() else Path("video_sasl_results.json")
+    if results_file.exists():
+        try:
+            with open(results_file, 'r') as f:
+                results = json.load(f)
+                if 'training_date' in results:
+                    stats['last_training'] = results['training_date'][:10]  # Just the date part
+        except:
+            pass
     
     return stats
 
@@ -162,7 +117,11 @@ def collect_video_data():
     print("This will launch the interactive video collector.")
     print("Press SPACE to start recording, SPACE again to stop and save!")
     print("Quality indicator shows when you're ready to record.")
-    print("\nLaunching video collector...")
+    print("\nPress Enter to continue or 'q' to return to menu...")
+    
+    choice = input().strip().lower()
+    if choice == 'q':
+        return
     
     try:
         # Import and run video collector
@@ -177,9 +136,10 @@ def collect_video_data():
         
     except ImportError as e:
         print(f"ERROR: Could not import video collector: {e}")
-        print("Please check if all dependencies are installed.")
+        input("Press Enter to continue...")
     except Exception as e:
         print(f"ERROR: Error during video collection: {e}")
+        input("Press Enter to continue...")
 
 def configure_training_parameters():
     """Configure training parameters interactively"""
@@ -280,6 +240,7 @@ def train_models():
     if not has_classes:
         print("No video dataset found!")
         print("Please collect video data first using option 1.")
+        input("Press Enter to continue...")
         return
     
     # Show dataset info
@@ -291,6 +252,7 @@ def train_models():
     
     if stats['classes'] < 2:
         print("Need at least 2 classes to train models!")
+        input("Press Enter to continue...")
         return
     
     if stats['total_videos'] < 10:
@@ -338,7 +300,11 @@ def train_models():
     estimated_time = config['epochs'] * (2 + config['augmentation_factor']) * 0.5
     print(f"Estimated training time: {estimated_time:.0f}-{estimated_time*2:.0f} minutes")
     
-    print(f"\nStarting training in 3 seconds...")
+    print(f"\nPress Enter to start training or 'q' to return to menu...")
+    
+    choice = input().strip().lower()
+    if choice == 'q':
+        return
     
     try:
         # Ensure outputs directory exists
@@ -385,11 +351,14 @@ def train_models():
         else:
             print(f"\n Training failed. Check your dataset.")
         
+        input("Press Enter to continue...")
+        
     except ImportError as e:
         print(f"ERROR: Could not import training system: {e}")
-        print("Please check if all dependencies are installed.")
+        input("Press Enter to continue...")
     except Exception as e:
         print(f"ERROR: Error during training: {e}")
+        input("Press Enter to continue...")
 
 def live_camera_recognition():
     """Launch live camera recognition"""
@@ -397,56 +366,24 @@ def live_camera_recognition():
     print(" Live SASL Camera Recognition")
     print("=" * 50)
     
-    # Check if trained models exist - updated to check training folders
+    # Check if trained models exist
     outputs_dir = Path("outputs")
-    cnn_model_path = None
-    pose_model_path = None
-    classes_path = None
+    cnn_model_path = outputs_dir / "best_sasl_cnn_lstm_model.pth"
+    pose_model_path = outputs_dir / "best_sasl_pose_lstm_model.pth"
+    classes_path = outputs_dir / "pytorch_sasl_classes.json"
     
-    # First check in timestamped training directories
-    if outputs_dir.exists():
-        training_dirs = [d for d in outputs_dir.iterdir() if d.is_dir() and d.name.startswith("training_")]
-        if training_dirs:
-            # Get the latest training directory
-            latest_training_dir = sorted(training_dirs, key=lambda x: x.name)[-1]
-            models_dir = latest_training_dir / "models"
-            results_dir = latest_training_dir / "results"
-            
-            if models_dir.exists() and results_dir.exists():
-                cnn_model_path = models_dir / "best_sasl_cnn_lstm_model.pth"
-                pose_model_path = models_dir / "best_sasl_pose_lstm_model.pth"
-                # Try both class name file formats
-                classes_path = results_dir / "pytorch_sasl_classes.json"
-                if not classes_path.exists():
-                    classes_path = results_dir / "class_names.json"
-    
-    # Fallback: Check in outputs/ and root directory  
-    if not (cnn_model_path and cnn_model_path.exists()):
-        cnn_model_path = outputs_dir / "best_sasl_cnn_lstm_model.pth"
-        if not cnn_model_path.exists():
-            cnn_model_path = Path("best_sasl_cnn_lstm_model.pth")
-    
-    if not (pose_model_path and pose_model_path.exists()):
-        pose_model_path = outputs_dir / "best_sasl_pose_lstm_model.pth"
-        if not pose_model_path.exists():
-            pose_model_path = Path("best_sasl_pose_lstm_model.pth")
-    
-    if not (classes_path and classes_path.exists()):
-        classes_path = outputs_dir / "pytorch_sasl_classes.json"
-        if not classes_path.exists():
-            classes_path = outputs_dir / "class_names.json"
-            if not classes_path.exists():
-                classes_path = Path("pytorch_sasl_classes.json")
-                if not classes_path.exists():
-                    classes_path = Path("class_names.json")
+    # Also check in root directory (backwards compatibility)
+    if not cnn_model_path.exists():
+        cnn_model_path = Path("best_sasl_cnn_lstm_model.pth")
+    if not pose_model_path.exists():
+        pose_model_path = Path("best_sasl_pose_lstm_model.pth")
+    if not classes_path.exists():
+        classes_path = Path("pytorch_sasl_classes.json")
     
     if not (cnn_model_path.exists() and pose_model_path.exists() and classes_path.exists()):
         print("ERROR: No trained models found!")
         print("Please train models first using option 2.")
-        print("\nSearched for models in:")
-        print(f"  - Training directories: {outputs_dir}/training_*/models/")
-        print(f"  - Outputs directory: {outputs_dir}")
-        print(f"  - Root directory: current folder")
+        input("Press Enter to continue...")
         return
     
     try:
@@ -462,56 +399,29 @@ def live_camera_recognition():
         print(f"   • Hold still and sign clearly")
         print(f"   • Press 'q' to quit")
         print(f"   • Press 'r' to reset prediction buffer")
-        print(f"   • Press 'h' to toggle UI mode")
-        print(f"   • Press 'o' to toggle overlays")
-        print(f"   • Press 'c' for clean mode")
         
-        print(f"\nInitializing camera recognition...")
-        print(f"Loading models:")
-        print(f"  CNN Model: {cnn_model_path}")
-        print(f"  Pose Model: {pose_model_path}")
-        print(f"  Classes: {classes_path}")
+        input("Press Enter to start camera or 'q' to return to menu...")
+        choice = input().strip().lower()
+        if choice == 'q':
+            return
         
         # Launch camera recognition
-        print(f"Importing camera recognition module...")
         from sasl_camera_recognition import SASLCameraRecognition
         
-        print(f"Creating camera recognition instance...")
         camera = SASLCameraRecognition(
             cnn_model_path=str(cnn_model_path),
             pose_model_path=str(pose_model_path),
             classes_path=str(classes_path)
         )
         
-        print(f"Starting live recognition...")
         camera.run_live_recognition()
         
     except ImportError as e:
-        print(f"\n" + "="*50)
-        print(f"IMPORT ERROR: Could not import camera system")
-        print(f"Error: {e}")
-        print(f"Please check if all dependencies are installed.")
-        print(f"Use option 5 (System Information) to check dependencies.")
-        print(f"="*50)
-        input("Press Enter to return to main menu...")
+        print(f"ERROR: Could not import camera system: {e}")
+        input("Press Enter to continue...")
     except Exception as e:
-        print(f"\n" + "="*50)
-        print(f"CAMERA ERROR: Error during camera recognition")
-        print(f"Error: {e}")
-        print(f"Error type: {type(e).__name__}")
-        
-        # Try to show more details
-        import traceback
-        print(f"\nFull error details:")
-        traceback.print_exc()
-        
-        print(f"\nPossible causes:")
-        print(f"  - Camera not connected or in use by another app")
-        print(f"  - Model files corrupted or incompatible")
-        print(f"  - GPU/memory issues")
-        print(f"  - Missing dependencies")
-        print(f"="*50)
-        input("Press Enter to return to main menu...")
+        print(f"ERROR: Error during camera recognition: {e}")
+        input("Press Enter to continue...")
 
 def manage_models_outputs():
     """Manage models and outputs"""
@@ -616,6 +526,8 @@ def manage_models_outputs():
                 print(f"ERROR: Error reading results: {e}")
         else:
             print(f" No training results found")
+    
+    input(f"\nPress Enter to continue...")
 
 def show_system_info():
     """Show system information"""
@@ -628,25 +540,21 @@ def show_system_info():
     
     # Check dependencies
     print(f"\n Dependencies:")
-    check_dependencies_verbose()
-    
-    # Additional module versions
     modules_to_check = {
-        'timm': 'TIMM (PyTorch Image Models)',
         'cv2': 'OpenCV',
+        'tensorflow': 'TensorFlow',
         'mediapipe': 'MediaPipe',
         'numpy': 'NumPy',
         'sklearn': 'Scikit-learn'
     }
     
-    print(f"\n Module Versions:")
     for module, name in modules_to_check.items():
         try:
             mod = __import__(module)
             version = getattr(mod, '__version__', 'Unknown version')
-            print(f"   {name}: {version}")
+            print(f"   INSTALLED: {name}: {version}")
         except ImportError:
-            print(f"   {name}: Not installed")
+            print(f"   MISSING: {name}: Not installed")
     
     # Directory structure
     print(f"\n Project Structure:")
@@ -674,19 +582,17 @@ def show_system_info():
     # GPU check
     print(f"\n GPU Information:")
     try:
-        import torch
-        if torch.cuda.is_available():
-            for i in range(torch.cuda.device_count()):
-                gpu_name = torch.cuda.get_device_name(i)
-                memory = torch.cuda.get_device_properties(i).total_memory / (1024**3)
-                print(f"   GPU {i}: {gpu_name} ({memory:.1f} GB)")
-            print(f"   Current device: {torch.cuda.current_device()}")
+        import tensorflow as tf
+        gpus = tf.config.list_physical_devices('GPU')
+        if gpus:
+            for i, gpu in enumerate(gpus):
+                print(f"   GPU {i}: {gpu.name}")
         else:
             print(f"   INFO: No GPU detected - using CPU")
     except:
-        print(f"   ERROR: Could not check GPU status")
+        print(f"   UNKNOWN: Could not check GPU status")
     
-    print(f"\nSystem information complete.")
+    input(f"\nPress Enter to continue...")
 
 def create_gitignore():
     """Create or update .gitignore file"""
@@ -783,7 +689,7 @@ def main():
     
     if not check_dependencies():
         print("\nERROR: Please install required dependencies before continuing.")
-        print("Use System Information (option 5) to check dependencies.")
+        input("Press Enter to exit...")
         return
     
     while True:
@@ -808,13 +714,14 @@ def main():
                 break
             else:
                 print("ERROR: Invalid choice. Please enter 1-6.")
+                input("Press Enter to continue...")
                 
         except KeyboardInterrupt:
             print("\n\n Goodbye!")
             break
         except Exception as e:
-            print(f"ERROR: Unexpected error: {e}")
-            print("Returning to main menu...")
+            print(f"\nERROR: Unexpected error: {e}")
+            input("Press Enter to continue...")
 
 if __name__ == "__main__":
     main()
