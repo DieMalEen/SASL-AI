@@ -20,37 +20,37 @@ def format_size(bytes):
     return f"{bytes:.1f} TB"
 
 def main():
-    print("🔍 SASL Model Status Checker")
+    print("SASL Model Status Checker")
     print("=" * 40)
     
     outputs_dir = Path("outputs")
     
     if not outputs_dir.exists():
-        print("❌ No outputs directory found")
-        print("🔧 Run training first: python video_based_sasl_training.py")
+        print("No outputs directory found")
+        print("Run training first: python video_based_sasl_training.py")
         return
     
     # Find training sessions
     training_dirs = [d for d in outputs_dir.iterdir() if d.is_dir() and d.name.startswith("training_")]
     
     if not training_dirs:
-        print("❌ No training sessions found")
-        print("🔧 Run training first: python video_based_sasl_training.py")
+        print("No training sessions found")
+        print("Run training first: python video_based_sasl_training.py")
         return
     
-    print(f"📁 Found {len(training_dirs)} training session(s):")
+    print(f"Found {len(training_dirs)} training session(s):")
     print()
     
     for i, training_dir in enumerate(sorted(training_dirs, key=lambda x: x.name), 1):
-        print(f"📦 Session {i}: {training_dir.name}")
+        print(f"Session {i}: {training_dir.name}")
         
         # Parse timestamp from directory name
         try:
             timestamp_str = training_dir.name.split("_", 1)[1]
             timestamp = datetime.strptime(timestamp_str, "%Y%m%d_%H%M%S")
-            print(f"   🕐 Date: {timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
+            print(f"   Date: {timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
         except:
-            print(f"   🕐 Date: Unknown")
+            print(f"   Date: Unknown")
         
         # Check models
         models_dir = training_dir / "models"
@@ -62,17 +62,17 @@ def main():
             
             if cnn_model.exists():
                 size = format_size(cnn_model.stat().st_size)
-                print(f"   ✅ CNN+LSTM Model: {size}")
+                print(f"   CNN+LSTM Model: {size}")
             else:
-                print(f"   ❌ CNN+LSTM Model: Missing")
+                print(f"   CNN+LSTM Model: Missing")
             
             if pose_model.exists():
                 size = format_size(pose_model.stat().st_size)
-                print(f"   ✅ Pose LSTM Model: {size}")
+                print(f"   Pose LSTM Model: {size}")
             else:
-                print(f"   ❌ Pose LSTM Model: Missing")
+                print(f"   Pose LSTM Model: Missing")
         else:
-            print(f"   ❌ Models directory: Missing")
+            print(f"   Models directory: Missing")
         
         # Check results
         if results_dir.exists():
@@ -83,11 +83,11 @@ def main():
                 try:
                     with open(class_names_file, 'r') as f:
                         classes = json.load(f)
-                    print(f"   ✅ Classes ({len(classes)}): {', '.join(classes)}")
+                    print(f"   Classes ({len(classes)}): {', '.join(classes)}")
                 except:
-                    print(f"   ⚠️  Classes file: Corrupted")
+                    print(f"   Classes file: Corrupted")
             else:
-                print(f"   ❌ Classes file: Missing")
+                print(f"   Classes file: Missing")
             
             if results_file.exists():
                 try:
@@ -95,13 +95,13 @@ def main():
                         results = json.load(f)
                     if 'best_accuracy' in results:
                         acc = results['best_accuracy'] * 100
-                        print(f"   📊 Best Accuracy: {acc:.1f}%")
+                        print(f"   Best Accuracy: {acc:.1f}%")
                     if 'training_time' in results:
-                        print(f"   ⏱️  Training Time: {results['training_time']}")
+                        print(f"   Training Time: {results['training_time']}")
                 except:
-                    print(f"   ⚠️  Results file: Could not read")
+                    print(f"   Results file: Could not read")
         else:
-            print(f"   ❌ Results directory: Missing")
+            print(f"   Results directory: Missing")
         
         print()
     
@@ -110,7 +110,7 @@ def main():
     models_dir = latest_session / "models"
     results_dir = latest_session / "results"
     
-    print("🚀 Camera Recognition Status:")
+    print("Camera Recognition Status:")
     
     # Check if all required files exist
     required_files = [
@@ -122,19 +122,19 @@ def main():
     all_ready = True
     for file_path, name in required_files:
         if file_path.exists():
-            print(f"   ✅ {name}: Ready")
+            print(f"   {name}: Ready")
         else:
-            print(f"   ❌ {name}: Missing")
+            print(f"   {name}: Missing")
             all_ready = False
     
     print()
     if all_ready:
-        print("🎯 Status: READY FOR CAMERA RECOGNITION")
-        print("🚀 Run: python sasl_camera_recognition.py")
-        print("🚀 Or:  python launch_camera.py")
+        print("Status: READY FOR CAMERA RECOGNITION")
+        print("Run: python sasl_camera_recognition.py")
+        print("Or:  python launch_camera.py")
     else:
-        print("❌ Status: NOT READY")
-        print("🔧 Complete training first: python video_based_sasl_training.py")
+        print("Status: NOT READY")
+        print("Complete training first: python video_based_sasl_training.py")
 
 if __name__ == "__main__":
     main()

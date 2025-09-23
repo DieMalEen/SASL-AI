@@ -88,7 +88,7 @@ matplotlib>=3.7.0
 seaborn>=0.12.0
 ```
 
-## 📖 Usage Guide
+## Usage Guide
 
 ### 1. Main Menu System
 

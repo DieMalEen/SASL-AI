@@ -1,23 +1,24 @@
 #!/usr/bin/env python3
 """
-SASL PyTorch Video-Based Transfer Learning System
-===============================================
+SASL Unified Multi-Modal Video-Based Transfer Learning System
+===========================================================
 
-This system is designed for video-based SASL recognition using:
+This system uses a unified multi-modal architecture for video-based SASL recognition:
 - Video sequences (3-5 seconds each) of SASL signs
-- CNN + LSTM architecture for temporal modeling using PyTorch
+- Unified CNN+LSTM and Pose LSTM architecture with learned fusion weights
 - MediaPipe pose/hand tracking over time
 - Transfer learning from pre-trained models
+- Early fusion for optimal modality combination
 - Optimized for small video datasets with comprehensive batch monitoring
 
 Key Features:
-- Processes video sequences frame by frame
-- Extracts both visual features (CNN) and pose landmarks (MediaPipe)
-- Uses temporal modeling (LSTM) to understand sign dynamics
-- Ensemble approach combining multiple models
-- Real-time batch progress monitoring
+- Single unified model instead of separate CNN+LSTM and Pose LSTM models
+- Learnable fusion weights (no fixed 50-50 averaging)
+- Joint feature learning between visual and pose modalities
+- More efficient inference (single forward pass)
 - Advanced data augmentation
-- Configurable training parameters
+- Configurable training parameters through menu system
+- Better accuracy through end-to-end optimization
 """
 
 import torch
@@ -53,7 +54,7 @@ if torch.cuda.is_available():
     print(f"GPU: {torch.cuda.get_device_name(0)}")
     print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
 else:
-    print("💻 Using CPU - Consider GPU for faster training")
+    print("Using CPU - Consider GPU for faster training")
 
 # Set seeds for reproducibility
 torch.manual_seed(42)
@@ -325,130 +326,193 @@ class SASLVideoDataset(Dataset):
         
         return video, pose, label.squeeze()
 
-class CNNLSTMModel(nn.Module):
-    """CNN+LSTM model for video classification using PyTorch"""
+class UnifiedSASLModel(nn.Module):
+    """
+    Unified Multi-Modal SASL Model
     
-    def __init__(self, num_classes, sequence_length=30, input_size=(224, 224)):
-        super(CNNLSTMModel, self).__init__()
+    Combines CNN+LSTM (video) and Pose LSTM (landmarks) into a single model.
+    Uses early fusion with learnable weights to optimally combine visual and pose features.
+    """
+    
+    def __init__(self, num_classes, sequence_length=30, input_size=(224, 224), pose_dim=225):
+        super(UnifiedSASLModel, self).__init__()
         
         self.sequence_length = sequence_length
         self.input_size = input_size
-        self.num_classes = num_classes
-        
-        # Pre-trained CNN backbone (EfficientNet)
-        self.backbone = timm.create_model('efficientnet_b0', pretrained=True, num_classes=0)
-        
-        # Freeze backbone for transfer learning
-        for param in self.backbone.parameters():
-            param.requires_grad = False
-        
-        # Get feature dimension from backbone
-        feature_dim = self.backbone.num_features
-        
-        # Temporal processing layers
-        self.temporal_conv = nn.Conv1d(feature_dim, 512, kernel_size=3, padding=1)
-        self.temporal_bn = nn.BatchNorm1d(512)
-        self.dropout1 = nn.Dropout(0.3)
-        
-        # LSTM layers
-        self.lstm1 = nn.LSTM(512, 256, bidirectional=True, batch_first=True)
-        self.lstm2 = nn.LSTM(512, 128, bidirectional=True, batch_first=True)
-        self.dropout_lstm = nn.Dropout(0.3)
-        
-        # Classification layers
-        self.classifier = nn.Sequential(
-            nn.Linear(256, 256),
-            nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(128, num_classes)
-        )
-    
-    def forward(self, x):
-        batch_size, seq_len, c, h, w = x.size()
-        
-        # Process each frame through CNN
-        x = x.view(-1, c, h, w)  # (batch*seq, c, h, w)
-        features = self.backbone(x)  # (batch*seq, feature_dim)
-        
-        # Reshape back to sequence
-        features = features.view(batch_size, seq_len, -1)  # (batch, seq, feature_dim)
-        
-        # Temporal convolution
-        x = features.transpose(1, 2)  # (batch, feature_dim, seq)
-        x = torch.relu(self.temporal_bn(self.temporal_conv(x)))
-        x = self.dropout1(x)
-        x = x.transpose(1, 2)  # (batch, seq, 512)
-        
-        # LSTM layers
-        x, _ = self.lstm1(x)  # (batch, seq, 512)
-        x = self.dropout_lstm(x)
-        x, _ = self.lstm2(x)  # (batch, seq, 256)
-        
-        # Global average pooling over sequence
-        x = torch.mean(x, dim=1)  # (batch, 256)
-        
-        # Classification
-        x = self.classifier(x)
-        
-        return x
-
-class PoseLSTMModel(nn.Module):
-    """LSTM model for pose sequence classification using PyTorch"""
-    
-    def __init__(self, num_classes, sequence_length=30, pose_dim=225):
-        super(PoseLSTMModel, self).__init__()
-        
-        self.sequence_length = sequence_length
         self.pose_dim = pose_dim
         self.num_classes = num_classes
         
-        # Input processing
-        self.input_bn = nn.BatchNorm1d(pose_dim)
-        self.input_dropout = nn.Dropout(0.2)
+        print(f"Building Unified SASL Model:")
+        print(f"  Input size: {input_size}")
+        print(f"  Sequence length: {sequence_length}")
+        print(f"  Pose dimension: {pose_dim}")
+        print(f"  Number of classes: {num_classes}")
         
-        # LSTM layers
-        self.lstm1 = nn.LSTM(pose_dim, 256, bidirectional=True, batch_first=True)
-        self.lstm2 = nn.LSTM(512, 128, bidirectional=True, batch_first=True)
-        self.lstm3 = nn.LSTM(256, 64, bidirectional=True, batch_first=True)
-        self.dropout_lstm = nn.Dropout(0.4)
+        # =================================================================
+        # VISUAL PROCESSING BRANCH (CNN + Temporal Convolution)
+        # =================================================================
+        print("  Initializing visual processing branch...")
         
-        # Classification layers
+        # Pre-trained CNN backbone (EfficientNet)
+        self.cnn_backbone = timm.create_model('efficientnet_b0', pretrained=True, num_classes=0)
+        
+        # Freeze backbone for transfer learning
+        for param in self.cnn_backbone.parameters():
+            param.requires_grad = False
+        
+        # Get CNN feature dimension
+        self.cnn_feature_dim = self.cnn_backbone.num_features  # 1280 for EfficientNet-B0
+        print(f"    CNN feature dimension: {self.cnn_feature_dim}")
+        
+        # Temporal processing for CNN features
+        self.visual_temporal_conv = nn.Conv1d(self.cnn_feature_dim, 512, kernel_size=3, padding=1)
+        self.visual_temporal_bn = nn.BatchNorm1d(512)
+        self.visual_dropout = nn.Dropout(0.3)
+        
+        # =================================================================
+        # POSE PROCESSING BRANCH
+        # =================================================================
+        print("  Initializing pose processing branch...")
+        
+        # Pose feature processing
+        self.pose_input_bn = nn.BatchNorm1d(pose_dim)
+        self.pose_input_dropout = nn.Dropout(0.2)
+        
+        # Project pose features to match visual feature dimension
+        self.pose_projection = nn.Sequential(
+            nn.Linear(pose_dim, 512),
+            nn.ReLU(),
+            nn.BatchNorm1d(512),
+            nn.Dropout(0.3)
+        )
+        
+        # =================================================================
+        # FUSION LAYER
+        # =================================================================
+        print("  Initializing fusion layer...")
+        
+        # Learnable fusion weights
+        self.fusion_weights = nn.Parameter(torch.tensor([0.5, 0.5]))  # Initialize equally
+        
+        # Combined feature dimension after fusion
+        self.fused_dim = 512
+        
+        # =================================================================
+        # UNIFIED TEMPORAL MODELING (LSTM)
+        # =================================================================
+        print("  Initializing unified LSTM layers...")
+        
+        # Multi-layer LSTM for temporal modeling of fused features
+        self.unified_lstm1 = nn.LSTM(self.fused_dim, 256, bidirectional=True, batch_first=True, dropout=0.3)
+        self.unified_lstm2 = nn.LSTM(512, 128, bidirectional=True, batch_first=True, dropout=0.3)
+        self.unified_lstm3 = nn.LSTM(256, 64, bidirectional=True, batch_first=True, dropout=0.2)
+        
+        # =================================================================
+        # CLASSIFICATION HEAD
+        # =================================================================
+        print("  Initializing classification head...")
+        
         self.classifier = nn.Sequential(
             nn.Linear(128, 256),
             nn.ReLU(),
+            nn.BatchNorm1d(256),
             nn.Dropout(0.5),
+            
             nn.Linear(256, 128),
             nn.ReLU(),
+            nn.BatchNorm1d(128),
             nn.Dropout(0.3),
-            nn.Linear(128, num_classes)
+            
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            
+            nn.Linear(64, num_classes)
         )
-    
-    def forward(self, x):
-        batch_size, seq_len, pose_dim = x.size()
         
-        # Normalize input
-        x = x.view(-1, pose_dim)  # (batch*seq, pose_dim)
-        x = self.input_bn(x)
-        x = self.input_dropout(x)
-        x = x.view(batch_size, seq_len, pose_dim)  # (batch, seq, pose_dim)
+        print(f"  Unified model initialized successfully!")
         
-        # LSTM layers
-        x, _ = self.lstm1(x)  # (batch, seq, 512)
-        x = self.dropout_lstm(x)
-        x, _ = self.lstm2(x)  # (batch, seq, 256)
-        x = self.dropout_lstm(x)
-        x, _ = self.lstm3(x)  # (batch, seq, 128)
+    def forward(self, videos, poses):
+        """
+        Forward pass through unified model
+        
+        Args:
+            videos: (batch_size, seq_len, channels, height, width)
+            poses: (batch_size, seq_len, pose_dim)
+        
+        Returns:
+            logits: (batch_size, num_classes)
+        """
+        batch_size, seq_len = videos.size(0), videos.size(1)
+        
+        # =================================================================
+        # PROCESS VISUAL FEATURES
+        # =================================================================
+        
+        # Process each frame through CNN
+        videos_flat = videos.view(-1, *videos.shape[2:])  # (batch*seq, C, H, W)
+        visual_features = self.cnn_backbone(videos_flat)  # (batch*seq, cnn_feature_dim)
+        
+        # Reshape back to sequence
+        visual_features = visual_features.view(batch_size, seq_len, self.cnn_feature_dim)  # (batch, seq, cnn_feature_dim)
+        
+        # Temporal convolution for visual features
+        visual_temp = visual_features.transpose(1, 2)  # (batch, cnn_feature_dim, seq)
+        visual_temp = torch.relu(self.visual_temporal_bn(self.visual_temporal_conv(visual_temp)))
+        visual_temp = self.visual_dropout(visual_temp)
+        visual_features_processed = visual_temp.transpose(1, 2)  # (batch, seq, 512)
+        
+        # =================================================================
+        # PROCESS POSE FEATURES
+        # =================================================================
+        
+        # Normalize and process pose input
+        poses_flat = poses.view(-1, self.pose_dim)  # (batch*seq, pose_dim)
+        poses_normalized = self.pose_input_bn(poses_flat)
+        poses_normalized = self.pose_input_dropout(poses_normalized)
+        
+        # Project pose features to match visual dimension
+        pose_features_projected = self.pose_projection(poses_normalized)  # (batch*seq, 512)
+        pose_features_processed = pose_features_projected.view(batch_size, seq_len, 512)  # (batch, seq, 512)
+        
+        # =================================================================
+        # FUSION LAYER
+        # =================================================================
+        
+        # Apply learnable fusion weights (softmax to ensure they sum to 1)
+        fusion_weights_normalized = torch.softmax(self.fusion_weights, dim=0)
+        
+        # Weighted fusion of visual and pose features
+        fused_features = (fusion_weights_normalized[0] * visual_features_processed + 
+                         fusion_weights_normalized[1] * pose_features_processed)
+        
+        # =================================================================
+        # UNIFIED TEMPORAL MODELING
+        # =================================================================
+        
+        # Process fused features through unified LSTM layers
+        x, _ = self.unified_lstm1(fused_features)  # (batch, seq, 512)
+        x, _ = self.unified_lstm2(x)  # (batch, seq, 256)
+        x, _ = self.unified_lstm3(x)  # (batch, seq, 128)
         
         # Global average pooling over sequence
         x = torch.mean(x, dim=1)  # (batch, 128)
         
-        # Classification
-        x = self.classifier(x)
+        # =================================================================
+        # CLASSIFICATION
+        # =================================================================
         
-        return x
+        logits = self.classifier(x)  # (batch, num_classes)
+        
+        return logits
+    
+    def get_fusion_weights(self):
+        """Get current learned fusion weights"""
+        weights = torch.softmax(self.fusion_weights, dim=0)
+        return {
+            'visual_weight': weights[0].item(),
+            'pose_weight': weights[1].item()
+        }
 
 class VideoSASLTrainer:
     """
@@ -519,7 +583,7 @@ class VideoSASLTrainer:
             for ext in ['*.mp4', '*.avi', '*.mov', '*.mkv', '*.wmv']:
                 video_files.extend(list(class_dir.glob(ext)))
             
-            print(f"  📁 '{class_name}': {len(video_files)} videos")
+            print(f"  '{class_name}': {len(video_files)} videos")
             
             for video_file in video_files:
                 all_video_tasks.append((
@@ -532,7 +596,7 @@ class VideoSASLTrainer:
         self.num_classes = len(class_names)
         self.class_names = class_names
         
-        print(f"\n⚡ Processing {len(all_video_tasks)} videos with {self.num_workers} workers...")
+        print(f"\nProcessing {len(all_video_tasks)} videos with {self.num_workers} workers...")
         
         video_sequences = []
         pose_sequences = []
@@ -544,7 +608,7 @@ class VideoSASLTrainer:
         with ProcessPoolExecutor(max_workers=self.num_workers) as executor:
             futures = {executor.submit(process_single_video, task): task for task in all_video_tasks}
             
-            with tqdm(total=len(all_video_tasks), desc="📹 Processing videos", 
+            with tqdm(total=len(all_video_tasks), desc="Processing videos", 
                      bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]") as pbar:
                 
                 for future in as_completed(futures):
@@ -596,7 +660,8 @@ class VideoSASLTrainer:
         # Map display names to dictionary keys
         key_mapping = {
             "CNN+LSTM": "cnn_lstm_history",
-            "Pose LSTM": "pose_lstm_history"
+            "Pose LSTM": "pose_lstm_history",
+            "Unified Model": "unified_model_history"
         }
         
         history_key = key_mapping.get(model_name, f'{model_name.lower().replace("+", "_").replace(" ", "_")}_history')
@@ -628,7 +693,7 @@ class VideoSASLTrainer:
         plt.tight_layout()
         
         # Save the plot
-        plot_filename = self.output_dir / "plots" / f"{model_name.lower()}_training_histor2y.png"
+        plot_filename = self.output_dir / "plots" / f"{model_name.lower().replace(' ', '_')}_training_history.png"
         plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
         plt.close()
         
@@ -644,9 +709,14 @@ class VideoSASLTrainer:
             for videos, poses, labels in data_loader:
                 videos, poses, labels = videos.to(device), poses.to(device), labels.to(device)
                 
-                if use_poses:
+                if model_name == "Unified Model":
+                    # Unified model uses both videos and poses
+                    outputs = model(videos, poses)
+                elif use_poses:
+                    # Pose-only models
                     outputs = model(poses)
                 else:
+                    # Video-only models
                     outputs = model(videos)
                 
                 _, predicted = torch.max(outputs, 1)
@@ -685,7 +755,7 @@ class VideoSASLTrainer:
         plt.tight_layout()
         
         # Save confusion matrix
-        cm_filename = self.output_dir / "confusion_matrices" / f"{model_name.lower()}_confusion_matrix.png"
+        cm_filename = self.output_dir / "confusion_matrices" / f"{model_name.lower().replace(' ', '_')}_confusion_matrix.png"
         plt.savefig(cm_filename, dpi=300, bbox_inches='tight')
         plt.close()
         
@@ -695,8 +765,8 @@ class VideoSASLTrainer:
         
         return str(cm_filename), cm, report
     
-    def save_comprehensive_results(self, training_results, class_names, cm_cnn, cm_pose, 
-                                 report_cnn, report_pose, plot_files):
+    def save_comprehensive_results(self, training_results, class_names, cm_unified, cm_legacy, 
+                                 report_unified, report_legacy, plot_files):
         """Save comprehensive training results with all metrics"""
         
         # Enhanced results dictionary
@@ -705,30 +775,25 @@ class VideoSASLTrainer:
             
             # Model architecture info
             'model_architecture': {
-                'cnn_lstm': {
-                    'backbone': 'EfficientNet-B0',
-                    'lstm_hidden_sizes': [256, 128],
-                    'bidirectional': True,
-                    'dropout': 0.3
-                },
-                'pose_lstm': {
-                    'lstm_hidden_sizes': [256, 128, 64],
-                    'bidirectional': True,
+                'unified_model': {
+                    'visual_branch': 'EfficientNet-B0',
+                    'pose_branch': '3-layer Bidirectional LSTM',
+                    'fusion_method': 'Learnable weighted fusion',
+                    'unified_lstm': '3-layer Bidirectional LSTM',
                     'pose_dim': 225,
-                    'dropout': 0.4
+                    'sequence_length': 30,
+                    'input_size': [224, 224]
                 }
             },
             
             # Confusion matrices
             'confusion_matrices': {
-                'cnn_lstm': cm_cnn.tolist(),
-                'pose_lstm': cm_pose.tolist()
+                'unified_model': cm_unified.tolist() if cm_unified is not None else None
             },
             
             # Classification reports
             'classification_reports': {
-                'cnn_lstm': report_cnn,
-                'pose_lstm': report_pose
+                'unified_model': report_unified if report_unified is not None else None
             },
             
             # Training environment
@@ -743,12 +808,10 @@ class VideoSASLTrainer:
             'output_files': {
                 'plots': plot_files,
                 'confusion_matrices': [
-                    str(self.output_dir / "confusion_matrices" / "cnn_lstm_confusion_matrix.png"),
-                    str(self.output_dir / "confusion_matrices" / "pose_lstm_confusion_matrix.png")
+                    str(self.output_dir / "confusion_matrices" / "unified_model_confusion_matrix.png")
                 ],
                 'models': [
-                    str(self.output_dir / "models" / "best_sasl_cnn_lstm_model.pth"),
-                    str(self.output_dir / "models" / "best_sasl_pose_lstm_model.pth")
+                    str(self.output_dir / "models" / "best_sasl_cnn_lstm_model.pth")
                 ]
             }
         }
@@ -766,7 +829,7 @@ class VideoSASLTrainer:
         # Create a summary report
         summary_file = self.output_dir / "results" / "training_summary.txt"
         with open(summary_file, 'w') as f:
-            f.write("SASL PyTorch Training Summary\\n")
+            f.write("SASL PyTorch Unified Model Training Summary\\n")
             f.write("=" * 50 + "\\n\\n")
             f.write(f"Training Date: {training_results['training_date']}\\n")
             f.write(f"Dataset Size: {training_results['dataset_size']} videos\\n")
@@ -778,21 +841,16 @@ class VideoSASLTrainer:
             
             f.write("Final Results:\\n")
             f.write("-" * 20 + "\\n")
-            f.write(f"CNN+LSTM Accuracy: {training_results['final_cnn_lstm_accuracy']:.1f}%\\n")
-            f.write(f"Pose LSTM Accuracy: {training_results['final_pose_lstm_accuracy']:.1f}%\\n")
-            f.write(f"Ensemble Accuracy: {training_results['ensemble_accuracy']:.1f}%\\n\\n")
+            f.write(f"Unified Model Accuracy: {training_results['final_unified_accuracy']:.1f}%\\n")
+            final_weights = training_results['final_fusion_weights']
+            f.write(f"Final Fusion Weights - Visual: {final_weights['visual_weight']:.3f}, Pose: {final_weights['pose_weight']:.3f}\\n\\n")
             
-            f.write("CNN+LSTM Classification Report:\\n")
-            f.write("-" * 35 + "\\n")
-            for class_name in class_names:
-                metrics = report_cnn[class_name]
-                f.write(f"{class_name:>12}: Precision={metrics['precision']:.3f}, Recall={metrics['recall']:.3f}, F1={metrics['f1-score']:.3f}\\n")
-            
-            f.write("\\nPose LSTM Classification Report:\\n")
-            f.write("-" * 35 + "\\n")
-            for class_name in class_names:
-                metrics = report_pose[class_name]
-                f.write(f"{class_name:>12}: Precision={metrics['precision']:.3f}, Recall={metrics['recall']:.3f}, F1={metrics['f1-score']:.3f}\\n")
+            f.write("Unified Model Classification Report:\\n")
+            f.write("-" * 40 + "\\n")
+            if report_unified:
+                for class_name in class_names:
+                    metrics = report_unified[class_name]
+                    f.write(f"{class_name:>12}: Precision={metrics['precision']:.3f}, Recall={metrics['recall']:.3f}, F1={metrics['f1-score']:.3f}\\n")
         
         return str(results_file), str(summary_file)
 
@@ -863,63 +921,64 @@ class VideoSASLTrainer:
             shuffle=False, num_workers=0
         )
         
-        # Create models
-        print(f"\nCreating PyTorch models...")
-        cnn_lstm_model = CNNLSTMModel(self.num_classes, self.sequence_length, self.input_size).to(device)
-        pose_lstm_model = PoseLSTMModel(self.num_classes, self.sequence_length).to(device)
+        # Create unified model
+        print(f"\nCreating unified PyTorch model...")
+        unified_model = UnifiedSASLModel(self.num_classes, self.sequence_length, self.input_size).to(device)
         
-        # Optimizers and loss
-        optimizer_cnn = optim.Adam(cnn_lstm_model.parameters(), lr=self.learning_rate)
-        optimizer_pose = optim.Adam(pose_lstm_model.parameters(), lr=self.learning_rate)
-        criterion = nn.CrossEntropyLoss()
+        # Optimizer and loss
+        optimizer_unified = optim.Adam(
+            filter(lambda p: p.requires_grad, unified_model.parameters()), 
+            lr=self.learning_rate, weight_decay=1e-4
+        )
+        criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
         
-        # Learning rate schedulers
-        scheduler_cnn = optim.lr_scheduler.ReduceLROnPlateau(optimizer_cnn, patience=8, factor=0.5, min_lr=1e-6)
-        scheduler_pose = optim.lr_scheduler.ReduceLROnPlateau(optimizer_pose, patience=8, factor=0.5, min_lr=1e-6)
+        # Learning rate scheduler
+        scheduler_unified = optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer_unified, patience=8, factor=0.5, min_lr=1e-6, verbose=True
+        )
         
-        print(f"Models created and moved to {device}")
+        print(f"Unified model created and moved to {device}")
         
         # Training results storage
         training_results = {
-            'cnn_lstm_history': {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': []},
-            'pose_lstm_history': {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': []},
+            'unified_model_history': {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': []},
             'training_date': datetime.now().isoformat(),
             'num_classes': self.num_classes,
             'class_names': class_names,
             'dataset_size': len(video_sequences),
             'epochs': self.epochs,
             'batch_sizes': {'cnn': self.batch_size_cnn, 'pose': self.batch_size_pose},
-            'augmentation_factor': self.augmentation_factor
+            'augmentation_factor': self.augmentation_factor,
+            'fusion_weights_history': []
         }
         
-        # Train CNN+LSTM Model
+        # Train Unified Model
         print(f"\n" + "="*60)
-        print("TRAINING CNN+LSTM MODEL")
+        print("TRAINING UNIFIED SASL MODEL")
         print("="*60)
         
-        best_cnn_acc = 0.0
-        patience_counter_cnn = 0
+        best_unified_acc = 0.0
+        patience_counter = 0
         
         for epoch in range(self.epochs):
             print(f"\nEpoch {epoch+1}/{self.epochs}")
             print("-" * 40)
             
             # Training phase
-            cnn_lstm_model.train()
+            unified_model.train()
             train_loss, train_acc, train_samples = 0.0, 0.0, 0
             
-            train_pbar = tqdm(train_loader_cnn, desc=f"Training CNN+LSTM", 
+            train_pbar = tqdm(train_loader_cnn, desc=f"Training Unified Model", 
                             bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}] Loss: {postfix}")
             
             for batch_idx, (videos, poses, labels_batch) in enumerate(train_pbar):
-                videos, labels_batch = videos.to(device), labels_batch.to(device)
-                # Note: poses not used in CNN+LSTM training
+                videos, poses, labels_batch = videos.to(device), poses.to(device), labels_batch.to(device)
                 
-                optimizer_cnn.zero_grad()
-                outputs = cnn_lstm_model(videos)
+                optimizer_unified.zero_grad()
+                outputs = unified_model(videos, poses)
                 loss = criterion(outputs, labels_batch)
                 loss.backward()
-                optimizer_cnn.step()
+                optimizer_unified.step()
                 
                 # Calculate accuracy
                 _, predicted = torch.max(outputs.data, 1)
@@ -936,18 +995,17 @@ class VideoSASLTrainer:
             train_acc = 100. * train_acc / train_samples
             
             # Validation phase
-            cnn_lstm_model.eval()
+            unified_model.eval()
             val_loss, val_acc, val_samples = 0.0, 0.0, 0
             
             with torch.no_grad():
-                val_pbar = tqdm(test_loader_cnn, desc=f"Validating CNN+LSTM", leave=False,
+                val_pbar = tqdm(test_loader_cnn, desc=f"Validating Unified Model", leave=False,
                                bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}] Loss: {postfix}")
                 
                 for batch_idx, (videos, poses, labels_batch) in enumerate(val_pbar):
-                    videos, labels_batch = videos.to(device), labels_batch.to(device)
-                    # Note: poses not used in CNN+LSTM validation
+                    videos, poses, labels_batch = videos.to(device), poses.to(device), labels_batch.to(device)
                     
-                    outputs = cnn_lstm_model(videos)
+                    outputs = unified_model(videos, poses)
                     loss = criterion(outputs, labels_batch)
                     
                     _, predicted = torch.max(outputs.data, 1)
@@ -962,130 +1020,44 @@ class VideoSASLTrainer:
             val_loss /= len(test_loader_cnn)
             val_acc = 100. * val_acc / val_samples
             
+            # Get current fusion weights
+            fusion_weights = unified_model.get_fusion_weights()
+            training_results['fusion_weights_history'].append({
+                'epoch': epoch + 1,
+                'visual_weight': fusion_weights['visual_weight'],
+                'pose_weight': fusion_weights['pose_weight']
+            })
+            
             # Store results
-            training_results['cnn_lstm_history']['train_loss'].append(train_loss)
-            training_results['cnn_lstm_history']['train_acc'].append(train_acc)
-            training_results['cnn_lstm_history']['val_loss'].append(val_loss)
-            training_results['cnn_lstm_history']['val_acc'].append(val_acc)
+            training_results['unified_model_history']['train_loss'].append(train_loss)
+            training_results['unified_model_history']['train_acc'].append(train_acc)
+            training_results['unified_model_history']['val_loss'].append(val_loss)
+            training_results['unified_model_history']['val_acc'].append(val_acc)
             
             print(f"Results - Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.1f}%")
             print(f"           Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.1f}%")
+            print(f"           Fusion Weights - Visual: {fusion_weights['visual_weight']:.3f}, Pose: {fusion_weights['pose_weight']:.3f}")
             
             # Learning rate scheduling
-            scheduler_cnn.step(val_acc)
+            scheduler_unified.step(val_loss)
             
             # Save best model
-            if val_acc > best_cnn_acc:
-                best_cnn_acc = val_acc
-                torch.save(cnn_lstm_model.state_dict(), self.output_dir / "models" / 'best_sasl_cnn_lstm_model.pth')
-                print(f"New best CNN+LSTM model saved! Accuracy: {val_acc:.1f}%")
-                patience_counter_cnn = 0
+            if val_acc > best_unified_acc:
+                best_unified_acc = val_acc
+                torch.save(unified_model.state_dict(), self.output_dir / "models" / 'best_sasl_cnn_lstm_model.pth')
+                print(f"New best unified model saved! Accuracy: {val_acc:.1f}%")
+                patience_counter = 0
             else:
-                patience_counter_cnn += 1
+                patience_counter += 1
             
             # Early stopping
-            if patience_counter_cnn >= 20:
-                print(f"Early stopping CNN+LSTM training at epoch {epoch+1}")
-                break
-        
-        # Train Pose LSTM Model
-        print(f"\n" + "="*60)
-        print("TRAINING POSE LSTM MODEL")
-        print("="*60)
-        
-        best_pose_acc = 0.0
-        patience_counter_pose = 0
-        
-        for epoch in range(self.epochs):
-            print(f"\nEpoch {epoch+1}/{self.epochs}")
-            print("-" * 40)
-            
-            # Training phase
-            pose_lstm_model.train()
-            train_loss, train_acc, train_samples = 0.0, 0.0, 0
-            
-            train_pbar = tqdm(train_loader_pose, desc=f"Training Pose LSTM", 
-                            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}] Loss: {postfix}")
-            
-            for batch_idx, (videos, poses, labels_batch) in enumerate(train_pbar):
-                poses, labels_batch = poses.to(device), labels_batch.to(device)
-                
-                optimizer_pose.zero_grad()
-                outputs = pose_lstm_model(poses)
-                loss = criterion(outputs, labels_batch)
-                loss.backward()
-                optimizer_pose.step()
-                
-                # Calculate accuracy
-                _, predicted = torch.max(outputs.data, 1)
-                train_samples += labels_batch.size(0)
-                train_acc += (predicted == labels_batch).sum().item()
-                train_loss += loss.item()
-                
-                # Update progress bar
-                current_loss = train_loss / (batch_idx + 1)
-                current_acc = 100. * train_acc / train_samples
-                train_pbar.set_postfix(loss=f"{current_loss:.4f}", acc=f"{current_acc:.1f}%")
-            
-            train_loss /= len(train_loader_pose)
-            train_acc = 100. * train_acc / train_samples
-            
-            # Validation phase
-            pose_lstm_model.eval()
-            val_loss, val_acc, val_samples = 0.0, 0.0, 0
-            
-            with torch.no_grad():
-                val_pbar = tqdm(test_loader_pose, desc=f"Validating Pose LSTM", leave=False,
-                               bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}] Loss: {postfix}")
-                
-                for batch_idx, (videos, poses, labels_batch) in enumerate(val_pbar):
-                    poses, labels_batch = poses.to(device), labels_batch.to(device)
-                    
-                    outputs = pose_lstm_model(poses)
-                    loss = criterion(outputs, labels_batch)
-                    
-                    _, predicted = torch.max(outputs.data, 1)
-                    val_samples += labels_batch.size(0)
-                    val_acc += (predicted == labels_batch).sum().item()
-                    val_loss += loss.item()
-                    
-                    current_loss = val_loss / (batch_idx + 1)
-                    current_acc = 100. * val_acc / val_samples
-                    val_pbar.set_postfix(loss=f"{current_loss:.4f}", acc=f"{current_acc:.1f}%")
-            
-            val_loss /= len(test_loader_pose)
-            val_acc = 100. * val_acc / val_samples
-            
-            # Store results
-            training_results['pose_lstm_history']['train_loss'].append(train_loss)
-            training_results['pose_lstm_history']['train_acc'].append(train_acc)
-            training_results['pose_lstm_history']['val_loss'].append(val_loss)
-            training_results['pose_lstm_history']['val_acc'].append(val_acc)
-            
-            print(f"Results - Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.1f}%")
-            print(f"           Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.1f}%")
-            
-            # Learning rate scheduling
-            scheduler_pose.step(val_acc)
-            
-            # Save best model
-            if val_acc > best_pose_acc:
-                best_pose_acc = val_acc
-                torch.save(pose_lstm_model.state_dict(), self.output_dir / "models" / 'best_sasl_pose_lstm_model.pth')
-                print(f"New best Pose LSTM model saved! Accuracy: {val_acc:.1f}%")
-                patience_counter_pose = 0
-            else:
-                patience_counter_pose += 1
-            
-            # Early stopping
-            if patience_counter_pose >= 20:
-                print(f"Early stopping Pose LSTM training at epoch {epoch+1}")
+            if patience_counter >= 15:
+                print(f"Early stopping unified training at epoch {epoch+1}")
                 break
         
         # Final results
-        training_results['final_cnn_lstm_accuracy'] = best_cnn_acc
-        training_results['final_pose_lstm_accuracy'] = best_pose_acc
-        training_results['ensemble_accuracy'] = (best_cnn_acc + best_pose_acc) / 2  # Simple ensemble
+        training_results['final_unified_accuracy'] = best_unified_acc
+        training_results['final_fusion_weights'] = unified_model.get_fusion_weights()
         
         print(f"\n" + "="*80)
         print("GENERATING COMPREHENSIVE OUTPUTS")
@@ -1094,60 +1066,94 @@ class VideoSASLTrainer:
         # Generate training history plots
         plot_files = []
         print("Creating training history plots...")
-        cnn_plot = self.plot_training_history(training_results, "CNN+LSTM")
-        pose_plot = self.plot_training_history(training_results, "Pose LSTM")
-        plot_files.extend([cnn_plot, pose_plot])
+        unified_plot = self.plot_training_history(training_results, "Unified Model")
+        plot_files.append(unified_plot)
         print(f"  Generated: {len(plot_files)} training plots")
         
         # Generate confusion matrices
         print("Generating confusion matrices...")
-        cm_cnn_file, cm_cnn, report_cnn = self.generate_confusion_matrix(
-            cnn_lstm_model, test_loader_cnn, class_names, "CNN+LSTM", use_poses=False)
-        cm_pose_file, cm_pose, report_pose = self.generate_confusion_matrix(
-            pose_lstm_model, test_loader_pose, class_names, "Pose LSTM", use_poses=True)
-        print(f"  Generated: 2 confusion matrices")
+        cm_unified_file, cm_unified, report_unified = self.generate_confusion_matrix(
+            unified_model, test_loader_cnn, class_names, "Unified Model", use_poses=True)
+        print(f"  Generated: 1 confusion matrix")
         
         # Save comprehensive results
         print("Saving comprehensive results...")
         results_file, summary_file = self.save_comprehensive_results(
-            training_results, class_names, cm_cnn, cm_pose, 
-            report_cnn, report_pose, plot_files)
+            training_results, class_names, cm_unified, None, 
+            report_unified, None, plot_files)
         print(f"  Saved comprehensive results to: {results_file}")
         print(f"  Saved training summary to: {summary_file}")
         
         print(f"\n" + "="*80)
-        print("PYTORCH TRAINING COMPLETE!")
+        print("PYTORCH UNIFIED TRAINING COMPLETE!")
         print("="*80)
         print(f"Final Results:")
-        print(f"  CNN+LSTM Accuracy: {best_cnn_acc:.1f}%")
-        print(f"  Pose LSTM Accuracy: {best_pose_acc:.1f}%")
-        print(f"  Ensemble Accuracy: {training_results['ensemble_accuracy']:.1f}%")
+        print(f"  Unified Model Accuracy: {best_unified_acc:.1f}%")
+        final_weights = training_results['final_fusion_weights']
+        print(f"  Final Fusion Weights - Visual: {final_weights['visual_weight']:.3f}, Pose: {final_weights['pose_weight']:.3f}")
         print(f"\nOutput Directory: {self.output_dir}")
-        print(f"  📁 Models: {self.output_dir / 'models'}")
-        print(f"  📊 Plots: {self.output_dir / 'plots'}")
-        print(f"  🔍 Confusion Matrices: {self.output_dir / 'confusion_matrices'}")
-        print(f"  📋 Results: {self.output_dir / 'results'}")
+        print(f"  Models: {self.output_dir / 'models'}")
+        print(f"  Plots: {self.output_dir / 'plots'}")
+        print(f"  Confusion Matrices: {self.output_dir / 'confusion_matrices'}")
+        print(f"  Results: {self.output_dir / 'results'}")
         
-        return cnn_lstm_model, pose_lstm_model
+        return unified_model
 
 if __name__ == "__main__":
     print("SASL PyTorch Video-Based Transfer Learning System")
     print("=" * 60)
     
-    # Example usage
-    trainer = VideoSASLTrainer(
-        video_dataset_path="video_dataset",
-        sequence_length=30,
-        input_size=(224, 224),
-        epochs=50,
-        batch_size_cnn=4,
-        batch_size_pose=8,
-        augmentation_factor=1
-    )
+    try:
+        # Example usage with error monitoring
+        trainer = VideoSASLTrainer(
+            video_dataset_path="video_dataset",
+            sequence_length=30,
+            input_size=(224, 224),
+            epochs=50,
+            batch_size_cnn=4,
+            batch_size_pose=8,
+            augmentation_factor=1
+        )
+        
+        # Show GPU memory info
+        if torch.cuda.is_available():
+            print(f"\nGPU: {torch.cuda.get_device_name()}")
+            memory_gb = torch.cuda.get_device_properties(device).total_memory / 1024**3
+            print(f"GPU Memory: {memory_gb:.1f}GB total")
+            torch.cuda.empty_cache()
+        
+        print(f"\nStarting training (errors will be displayed, no screen clearing)...")
+        print("If training crashes around epoch 50, check the error message below:")
+        print("=" * 60)
+        
+        cnn_model, pose_model = trainer.train_models()
+        
+        if cnn_model is not None:
+            print("\n" + "="*60)
+            print("SUCCESS: PyTorch models trained successfully!")
+            print("="*60)
+        else:
+            print("\n" + "="*60)
+            print("TRAINING FAILED - Check error messages above")
+            print("="*60)
     
-    cnn_model, pose_model = trainer.train_models()
-    
-    if cnn_model is not None:
-        print("SUCCESS: PyTorch models trained successfully!")
-    else:
-        print("Training failed. Check your dataset.")
+    except Exception as e:
+        print(f"\n{'='*60}")
+        print("ERROR DURING TRAINING - NO SCREEN CLEARING")
+        print("="*60)
+        print(f"Error: {e}")
+        print(f"Error type: {type(e).__name__}")
+        
+        if "out of memory" in str(e).lower():
+            print(f"\nGPU OUT OF MEMORY ERROR!")
+            print(f"Solutions:")
+            print(f"1. Reduce batch_size_cnn from 4 to 2")
+            print(f"2. Reduce batch_size_pose from 8 to 4")
+            print(f"3. Reduce sequence_length from 30 to 20")
+        
+        print(f"\nFull error details:")
+        import traceback
+        traceback.print_exc()
+        
+        print(f"\nPress Enter to continue...")
+        input()

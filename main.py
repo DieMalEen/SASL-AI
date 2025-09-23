@@ -19,8 +19,9 @@ import json
 import subprocess
 
 def clear_screen():
-    """Clear the terminal screen"""
-    os.system('cls' if os.name == 'nt' else 'clear')
+    """Clear the terminal screen - DISABLED to keep output visible"""
+    # os.system('cls' if os.name == 'nt' else 'clear')
+    pass
 
 def print_banner():
     """Print the main banner"""
@@ -46,10 +47,10 @@ def check_dependencies_verbose():
     for module in required_modules:
         try:
             __import__(module)
-            print(f"  ✓ {module}")
+            print(f"  OK {module}")
         except ImportError:
             missing_modules.append(module)
-            print(f"  ✗ {module}")
+            print(f"  NO {module}")
     
     if missing_modules:
         print(f"\n!!! Missing required modules: {', '.join(missing_modules)}")
@@ -134,7 +135,6 @@ def get_dataset_stats():
 
 def show_main_menu():
     """Display the main menu"""
-    clear_screen()
     print_banner()
     
     # Show current status
@@ -156,7 +156,6 @@ def show_main_menu():
 
 def collect_video_data():
     """Launch video data collection"""
-    clear_screen()
     print("SASL Video Data Collection")
     print("=" * 50)
     print("This will launch the interactive video collector.")
@@ -183,7 +182,6 @@ def collect_video_data():
 
 def configure_training_parameters():
     """Configure training parameters interactively"""
-    clear_screen()
     print("Training Configuration")
     print("=" * 50)
     
@@ -270,7 +268,6 @@ def configure_training_parameters():
 
 def train_models():
     """Launch model training"""
-    clear_screen()
     print("SASL Model Training")
     print("=" * 50)
     
@@ -326,19 +323,19 @@ def train_models():
         print(f"  Pose Batch Size: {config['batch_size_pose']}")
         print(f"  Augmentation: {config['augmentation_factor']}x")
     
-    print(f"\nReady to train video-based SASL models!")
+    print(f"\nReady to train unified SASL model!")
     print(f"This will create:")
-    print(f"   • CNN+LSTM model (visual features + temporal modeling)")
-    print(f"   • Pose LSTM model (MediaPipe landmarks + temporal modeling)")
-    print(f"   • Ensemble predictions combining both models")
+    print(f"   • Unified Multi-Modal Model (visual + pose with learnable fusion)")
+    print(f"   • Single model handling both video and pose features")
+    print(f"   • Optimized inference with learned fusion weights")
     
     expected_dataset_size = stats['total_videos'] * (1 + config['augmentation_factor'])
     print(f"\nDataset size after augmentation: {expected_dataset_size} videos")
     
-    estimated_time = config['epochs'] * (2 + config['augmentation_factor']) * 0.5
-    print(f"Estimated training time: {estimated_time:.0f}-{estimated_time*2:.0f} minutes")
+    estimated_time = config['epochs'] * (1 + config['augmentation_factor']) * 0.4  # Faster with unified model
+    print(f"Estimated training time: {estimated_time:.0f}-{estimated_time*1.5:.0f} minutes")
     
-    print(f"\nStarting training in 3 seconds...")
+    print(f"\nStarting unified training in 3 seconds...")
     
     try:
         # Ensure outputs directory exists
@@ -348,7 +345,7 @@ def train_models():
         # Import and run training with custom parameters
         from video_based_sasl_training import VideoSASLTrainer
         
-        print("\nInitializing trainer with custom configuration...")
+        print("\nInitializing unified trainer with custom configuration...")
         trainer = VideoSASLTrainer(
             video_dataset_path="video_dataset",
             sequence_length=30,
@@ -359,31 +356,24 @@ def train_models():
             augmentation_factor=config['augmentation_factor']
         )
         
-        print("Starting training process...")
-        cnn_lstm_model, pose_lstm_model = trainer.train_models()
+        print("Starting unified training process...")
+        unified_model = trainer.train_models()
         
-        if cnn_lstm_model is not None:
-            # Move model files to outputs directory
-            import shutil
+        if unified_model is not None:
+            print(f"\nUnified model training completed successfully!")
+            print(f"Models and results saved in: {trainer.output_dir}")
             
-            model_files = [
-                "best_sasl_cnn_lstm_model.h5",
-                "best_sasl_pose_lstm_model.h5",
-                "video_sasl_results.json",
-                "video_sasl_classes.json"
-            ]
-            
-            print(f"\n Moving model files to outputs directory...")
-            for file in model_files:
-                if Path(file).exists():
-                    shutil.move(file, outputs_dir / file)
-                    print(f"   MOVED: {file}")
-            
-            print(f"\n Training completed successfully!")
-            print(f" Models saved in: outputs/")
+            # Show final fusion weights
+            try:
+                fusion_weights = unified_model.get_fusion_weights()
+                print(f"Learned Fusion Weights:")
+                print(f"   Visual branch: {fusion_weights['visual_weight']:.3f}")
+                print(f"   Pose branch: {fusion_weights['pose_weight']:.3f}")
+            except:
+                pass
             
         else:
-            print(f"\n Training failed. Check your dataset.")
+            print(f"\nTraining failed. Check your dataset.")
         
     except ImportError as e:
         print(f"ERROR: Could not import training system: {e}")
@@ -392,18 +382,16 @@ def train_models():
         print(f"ERROR: Error during training: {e}")
 
 def live_camera_recognition():
-    """Launch live camera recognition"""
-    clear_screen()
-    print(" Live SASL Camera Recognition")
+    """Launch live camera recognition using unified model"""
+    print("Live SASL Camera Recognition")
     print("=" * 50)
     
-    # Check if trained models exist - updated to check training folders
+    # Check if trained unified model exists
     outputs_dir = Path("outputs")
-    cnn_model_path = None
-    pose_model_path = None
+    unified_model_path = None
     classes_path = None
     
-    # First check in timestamped training directories
+    # Look for unified model in training directories first
     if outputs_dir.exists():
         training_dirs = [d for d in outputs_dir.iterdir() if d.is_dir() and d.name.startswith("training_")]
         if training_dirs:
@@ -413,82 +401,78 @@ def live_camera_recognition():
             results_dir = latest_training_dir / "results"
             
             if models_dir.exists() and results_dir.exists():
-                cnn_model_path = models_dir / "best_sasl_cnn_lstm_model.pth"
-                pose_model_path = models_dir / "best_sasl_pose_lstm_model.pth"
-                # Try both class name file formats
-                classes_path = results_dir / "pytorch_sasl_classes.json"
-                if not classes_path.exists():
-                    classes_path = results_dir / "class_names.json"
+                unified_model_path = models_dir / "best_sasl_cnn_lstm_model.pth"
+                classes_path = results_dir / "class_names.json"
     
     # Fallback: Check in outputs/ and root directory  
-    if not (cnn_model_path and cnn_model_path.exists()):
-        cnn_model_path = outputs_dir / "best_sasl_cnn_lstm_model.pth"
-        if not cnn_model_path.exists():
-            cnn_model_path = Path("best_sasl_cnn_lstm_model.pth")
-    
-    if not (pose_model_path and pose_model_path.exists()):
-        pose_model_path = outputs_dir / "best_sasl_pose_lstm_model.pth"
-        if not pose_model_path.exists():
-            pose_model_path = Path("best_sasl_pose_lstm_model.pth")
+    if not (unified_model_path and unified_model_path.exists()):
+        unified_model_path = outputs_dir / "best_sasl_cnn_lstm_model.pth" if outputs_dir.exists() else Path("best_sasl_cnn_lstm_model.pth")
     
     if not (classes_path and classes_path.exists()):
-        classes_path = outputs_dir / "pytorch_sasl_classes.json"
-        if not classes_path.exists():
+        if outputs_dir.exists():
             classes_path = outputs_dir / "class_names.json"
+        if not classes_path.exists():
+            classes_path = Path("03_DATA_CONFIG") / "class_names.json"
             if not classes_path.exists():
-                classes_path = Path("pytorch_sasl_classes.json")
-                if not classes_path.exists():
-                    classes_path = Path("class_names.json")
+                classes_path = Path("class_names.json")
     
-    if not (cnn_model_path.exists() and pose_model_path.exists() and classes_path.exists()):
-        print("ERROR: No trained models found!")
-        print("Please train models first using option 2.")
-        print("\nSearched for models in:")
+    if not (unified_model_path.exists() and classes_path.exists()):
+        print("ERROR: No trained unified model found!")
+        print("Please train the unified model first using option 2.")
+        print("\nSearched for model in:")
         print(f"  - Training directories: {outputs_dir}/training_*/models/")
         print(f"  - Outputs directory: {outputs_dir}")
         print(f"  - Root directory: current folder")
+        print(f"  - Config directory: 03_DATA_CONFIG/")
         return
     
     try:
         with open(classes_path, 'r') as f:
             classes = json.load(f)
         
-        print(f"FOUND: Trained models for {len(classes)} SASL classes:")
-        for i, class_name in enumerate(classes, 1):
+        print(f"FOUND: Unified model trained for {len(classes)} SASL classes:")
+        for i, class_name in enumerate(classes[:10], 1):  # Show first 10 classes
             print(f"   {i:2d}. {class_name}")
+        if len(classes) > 10:
+            print(f"   ... and {len(classes) - 10} more classes")
         
-        print(f"\n Starting live camera recognition...")
-        print(f"Controls:")
+        print(f"\nStarting unified live camera recognition...")
+        print(f"Features:")
+        print(f"   • Single unified model (visual + pose)")
+        print(f"   • Learnable fusion weights optimization")
+        print(f"   • Real-time MediaPipe pose detection")
+        print(f"   • Temporal sequence modeling")
+        
+        print(f"\nControls:")
         print(f"   • Hold still and sign clearly")
         print(f"   • Press 'q' to quit")
-        print(f"   • Press 'r' to reset prediction buffer")
-        print(f"   • Press 'h' to toggle UI mode")
-        print(f"   • Press 'o' to toggle overlays")
-        print(f"   • Press 'c' for clean mode")
+        print(f"   • Press 's' for screenshot")
         
-        print(f"\nInitializing camera recognition...")
-        print(f"Loading models:")
-        print(f"  CNN Model: {cnn_model_path}")
-        print(f"  Pose Model: {pose_model_path}")
-        print(f"  Classes: {classes_path}")
+        print(f"\nInitializing unified camera recognition...")
+        print(f"Loading model: {unified_model_path}")
+        print(f"Loading classes: {classes_path}")
         
-        # Launch camera recognition
-        print(f"Importing camera recognition module...")
+        # Launch unified camera recognition
+        print(f"Importing unified camera recognition module...")
         from sasl_camera_recognition import SASLCameraRecognition
         
-        print(f"Creating camera recognition instance...")
-        camera = SASLCameraRecognition(
-            cnn_model_path=str(cnn_model_path),
-            pose_model_path=str(pose_model_path),
-            classes_path=str(classes_path)
+        print(f"Creating unified camera recognition instance...")
+        recognizer = SASLCameraRecognition(
+            cnn_model_path=str(unified_model_path),
+            pose_model_path=str(unified_model_path),  # Same unified model for both
+            classes_path=str(classes_path),
+            sequence_length=30,
+            confidence_threshold=0.7,
+            show_overlays=True,
+            minimal_ui=False
         )
         
-        print(f"Starting live recognition...")
-        camera.run_live_recognition()
+        print(f"Starting live unified recognition...")
+        recognizer.run_live_recognition()
         
     except ImportError as e:
         print(f"\n" + "="*50)
-        print(f"IMPORT ERROR: Could not import camera system")
+        print(f"IMPORT ERROR: Could not import unified camera system")
         print(f"Error: {e}")
         print(f"Please check if all dependencies are installed.")
         print(f"Use option 5 (System Information) to check dependencies.")
@@ -496,7 +480,7 @@ def live_camera_recognition():
         input("Press Enter to return to main menu...")
     except Exception as e:
         print(f"\n" + "="*50)
-        print(f"CAMERA ERROR: Error during camera recognition")
+        print(f"CAMERA ERROR: Error during unified camera recognition")
         print(f"Error: {e}")
         print(f"Error type: {type(e).__name__}")
         
@@ -507,7 +491,7 @@ def live_camera_recognition():
         
         print(f"\nPossible causes:")
         print(f"  - Camera not connected or in use by another app")
-        print(f"  - Model files corrupted or incompatible")
+        print(f"  - Unified model files corrupted or incompatible")
         print(f"  - GPU/memory issues")
         print(f"  - Missing dependencies")
         print(f"="*50)
@@ -515,7 +499,6 @@ def live_camera_recognition():
 
 def manage_models_outputs():
     """Manage models and outputs"""
-    clear_screen()
     print(" Model & Output Management")
     print("=" * 50)
     
@@ -619,7 +602,6 @@ def manage_models_outputs():
 
 def show_system_info():
     """Show system information"""
-    clear_screen()
     print(" System Information")
     print("=" * 50)
     
@@ -802,8 +784,7 @@ def main():
             elif choice == '5':
                 show_system_info()
             elif choice == '6':
-                clear_screen()
-                print(" Thank you for using SASL-AI!")
+                print("\n Thank you for using SASL-AI!")
                 print(" Keep building amazing sign language recognition!")
                 break
             else:

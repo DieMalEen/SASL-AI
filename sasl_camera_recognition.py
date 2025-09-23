@@ -1,743 +1,597 @@
-#!/usr/bin/env python3
 """
-SASL PyTorch Camera Recognition System
-====================================
+Unified SASL Camera Recognition System
+=====================================
 
-Real-time SASL sign recognition using PyTorch models trained with the video-based system.
-Provides live camera feed with sign recognition, confidence scores, and visual feedback.
+Real-time South African Sign Language recognition using unified multi-modal model.
+Combines video frames and pose landmarks in a single neural network.
 
 Features:
-- Real-time video processing with PyTorch models
-- CNN+LSTM and Pose LSTM ensemble predictions
-- MediaPipe pose/hand landmark overlay
+- Single unified model for both visual and pose features
+- Learnable fusion weights for optimal modality combination
+- Real-time MediaPipe pose detection and processing
+- Optimized inference with early fusion approach
 - Confidence-based prediction filtering
-- Top-3 predictions display
-- Clean, professional interface
+- Live webcam recognition with smooth predictions
+
+Author: SASL-AI Team
+Date: 2024
 """
 
-import torch
-import torch.nn as nn
 import cv2
 import numpy as np
-import json
+import mediapipe as mp
 import torch
 import torch.nn as nn
-import mediapipe as mp
+import timm
+import json
+from collections import deque
 from pathlib import Path
 import time
-from collections import deque
-import timm
+import argparse
 
-# Set device
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-class CNNLSTMModel(nn.Module):
-    """CNN+LSTM model for video classification using PyTorch"""
+class UnifiedSASLModel(nn.Module):
+    """
+    Unified Multi-Modal SASL Model
     
-    def __init__(self, num_classes, sequence_length=30, input_size=(224, 224)):
-        super(CNNLSTMModel, self).__init__()
+    Combines CNN+LSTM (video) and Pose LSTM (landmarks) into a single model.
+    Uses early fusion with learnable weights to optimally combine visual and pose features.
+    """
+    
+    def __init__(self, num_classes, sequence_length=30, input_size=(224, 224), pose_dim=225):
+        super(UnifiedSASLModel, self).__init__()
         
         self.sequence_length = sequence_length
         self.input_size = input_size
-        self.num_classes = num_classes
-        
-        # Pre-trained CNN backbone (EfficientNet)
-        self.backbone = timm.create_model('efficientnet_b0', pretrained=True, num_classes=0)
-        
-        # Freeze backbone for transfer learning
-        for param in self.backbone.parameters():
-            param.requires_grad = False
-        
-        # Get feature dimension from backbone
-        feature_dim = self.backbone.num_features
-        
-        # Temporal processing layers
-        self.temporal_conv = nn.Conv1d(feature_dim, 512, kernel_size=3, padding=1)
-        self.temporal_bn = nn.BatchNorm1d(512)
-        self.dropout1 = nn.Dropout(0.3)
-        
-        # LSTM layers
-        self.lstm1 = nn.LSTM(512, 256, bidirectional=True, batch_first=True, dropout=0.3)
-        self.lstm2 = nn.LSTM(512, 128, bidirectional=True, batch_first=True, dropout=0.3)
-        
-        # Classification layers
-        self.classifier = nn.Sequential(
-            nn.Linear(256, 256),
-            nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(128, num_classes)
-        )
-    
-    def forward(self, x):
-        batch_size, seq_len, c, h, w = x.size()
-        
-        # Process each frame through CNN
-        x = x.view(-1, c, h, w)  # (batch*seq, c, h, w)
-        features = self.backbone(x)  # (batch*seq, feature_dim)
-        
-        # Reshape back to sequence
-        features = features.view(batch_size, seq_len, -1)  # (batch, seq, feature_dim)
-        
-        # Temporal convolution
-        x = features.transpose(1, 2)  # (batch, feature_dim, seq)
-        x = torch.relu(self.temporal_bn(self.temporal_conv(x)))
-        x = self.dropout1(x)
-        x = x.transpose(1, 2)  # (batch, seq, 512)
-        
-        # LSTM layers
-        x, _ = self.lstm1(x)  # (batch, seq, 512)
-        x, _ = self.lstm2(x)  # (batch, seq, 256)
-        
-        # Global average pooling over sequence
-        x = torch.mean(x, dim=1)  # (batch, 256)
-        
-        # Classification
-        x = self.classifier(x)
-        
-        return x
-
-class PoseLSTMModel(nn.Module):
-    """LSTM model for pose sequence classification using PyTorch"""
-    
-    def __init__(self, num_classes, sequence_length=30, pose_dim=225):
-        super(PoseLSTMModel, self).__init__()
-        
-        self.sequence_length = sequence_length
         self.pose_dim = pose_dim
         self.num_classes = num_classes
         
-        # Input processing
-        self.input_bn = nn.BatchNorm1d(pose_dim)
-        self.input_dropout = nn.Dropout(0.2)
+        # =================================================================
+        # VISUAL PROCESSING BRANCH (CNN + Temporal Convolution)
+        # =================================================================
         
-        # LSTM layers
-        self.lstm1 = nn.LSTM(pose_dim, 256, bidirectional=True, batch_first=True, dropout=0.4)
-        self.lstm2 = nn.LSTM(512, 128, bidirectional=True, batch_first=True, dropout=0.3)
-        self.lstm3 = nn.LSTM(256, 64, bidirectional=True, batch_first=True, dropout=0.3)
+        # Pre-trained CNN backbone (EfficientNet)
+        self.cnn_backbone = timm.create_model('efficientnet_b0', pretrained=True, num_classes=0)
         
-        # Classification layers
+        # Freeze backbone for transfer learning
+        for param in self.cnn_backbone.parameters():
+            param.requires_grad = False
+        
+        # Get CNN feature dimension
+        self.cnn_feature_dim = self.cnn_backbone.num_features  # 1280 for EfficientNet-B0
+        
+        # Temporal processing for CNN features
+        self.visual_temporal_conv = nn.Conv1d(self.cnn_feature_dim, 512, kernel_size=3, padding=1)
+        self.visual_temporal_bn = nn.BatchNorm1d(512)
+        self.visual_dropout = nn.Dropout(0.3)
+        
+        # =================================================================
+        # POSE PROCESSING BRANCH
+        # =================================================================
+        
+        # Pose feature processing
+        self.pose_input_bn = nn.BatchNorm1d(pose_dim)
+        self.pose_input_dropout = nn.Dropout(0.2)
+        
+        # Project pose features to match visual feature dimension
+        self.pose_projection = nn.Sequential(
+            nn.Linear(pose_dim, 512),
+            nn.ReLU(),
+            nn.BatchNorm1d(512),
+            nn.Dropout(0.3)
+        )
+        
+        # =================================================================
+        # FUSION LAYER
+        # =================================================================
+        
+        # Learnable fusion weights
+        self.fusion_weights = nn.Parameter(torch.tensor([0.5, 0.5]))  # Initialize equally
+        
+        # Combined feature dimension after fusion
+        self.fused_dim = 512
+        
+        # =================================================================
+        # UNIFIED TEMPORAL MODELING (LSTM)
+        # =================================================================
+        
+        # Multi-layer LSTM for temporal modeling of fused features
+        self.unified_lstm1 = nn.LSTM(self.fused_dim, 256, bidirectional=True, batch_first=True, dropout=0.3)
+        self.unified_lstm2 = nn.LSTM(512, 128, bidirectional=True, batch_first=True, dropout=0.3)
+        self.unified_lstm3 = nn.LSTM(256, 64, bidirectional=True, batch_first=True, dropout=0.2)
+        
+        # =================================================================
+        # CLASSIFICATION HEAD
+        # =================================================================
+        
         self.classifier = nn.Sequential(
             nn.Linear(128, 256),
             nn.ReLU(),
+            nn.BatchNorm1d(256),
             nn.Dropout(0.5),
+            
             nn.Linear(256, 128),
             nn.ReLU(),
+            nn.BatchNorm1d(128),
             nn.Dropout(0.3),
-            nn.Linear(128, num_classes)
+            
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            
+            nn.Linear(64, num_classes)
         )
-    
-    def forward(self, x):
-        batch_size, seq_len, pose_dim = x.size()
         
-        # Normalize input
-        x = x.view(-1, pose_dim)  # (batch*seq, pose_dim)
-        x = self.input_bn(x)
-        x = self.input_dropout(x)
-        x = x.view(batch_size, seq_len, pose_dim)  # (batch, seq, pose_dim)
+    def forward(self, videos, poses):
+        """
+        Forward pass through unified model
         
-        # LSTM layers
-        x, _ = self.lstm1(x)  # (batch, seq, 512)
-        x, _ = self.lstm2(x)  # (batch, seq, 256)
-        x, _ = self.lstm3(x)  # (batch, seq, 128)
+        Args:
+            videos: (batch_size, seq_len, channels, height, width)
+            poses: (batch_size, seq_len, pose_dim)
+        
+        Returns:
+            logits: (batch_size, num_classes)
+        """
+        batch_size, seq_len = videos.size(0), videos.size(1)
+        
+        # =================================================================
+        # PROCESS VISUAL FEATURES
+        # =================================================================
+        
+        # Process each frame through CNN
+        videos_flat = videos.view(-1, *videos.shape[2:])  # (batch*seq, C, H, W)
+        visual_features = self.cnn_backbone(videos_flat)  # (batch*seq, cnn_feature_dim)
+        
+        # Reshape back to sequence
+        visual_features = visual_features.view(batch_size, seq_len, self.cnn_feature_dim)  # (batch, seq, cnn_feature_dim)
+        
+        # Temporal convolution for visual features
+        visual_temp = visual_features.transpose(1, 2)  # (batch, cnn_feature_dim, seq)
+        visual_temp = torch.relu(self.visual_temporal_bn(self.visual_temporal_conv(visual_temp)))
+        visual_temp = self.visual_dropout(visual_temp)
+        visual_features_processed = visual_temp.transpose(1, 2)  # (batch, seq, 512)
+        
+        # =================================================================
+        # PROCESS POSE FEATURES
+        # =================================================================
+        
+        # Normalize and process pose input
+        poses_flat = poses.view(-1, self.pose_dim)  # (batch*seq, pose_dim)
+        poses_normalized = self.pose_input_bn(poses_flat)
+        poses_normalized = self.pose_input_dropout(poses_normalized)
+        
+        # Project pose features to match visual dimension
+        pose_features_projected = self.pose_projection(poses_normalized)  # (batch*seq, 512)
+        pose_features_processed = pose_features_projected.view(batch_size, seq_len, 512)  # (batch, seq, 512)
+        
+        # =================================================================
+        # FUSION LAYER
+        # =================================================================
+        
+        # Apply learnable fusion weights (softmax to ensure they sum to 1)
+        fusion_weights_normalized = torch.softmax(self.fusion_weights, dim=0)
+        
+        # Weighted fusion of visual and pose features
+        fused_features = (fusion_weights_normalized[0] * visual_features_processed + 
+                         fusion_weights_normalized[1] * pose_features_processed)
+        
+        # =================================================================
+        # UNIFIED TEMPORAL MODELING
+        # =================================================================
+        
+        # Process fused features through unified LSTM layers
+        x, _ = self.unified_lstm1(fused_features)  # (batch, seq, 512)
+        x, _ = self.unified_lstm2(x)  # (batch, seq, 256)
+        x, _ = self.unified_lstm3(x)  # (batch, seq, 128)
         
         # Global average pooling over sequence
         x = torch.mean(x, dim=1)  # (batch, 128)
         
-        # Classification
-        x = self.classifier(x)
+        # =================================================================
+        # CLASSIFICATION
+        # =================================================================
         
-        return x
+        logits = self.classifier(x)  # (batch, num_classes)
+        
+        return logits
+    
+    def get_fusion_weights(self):
+        """Get current learned fusion weights"""
+        weights = torch.softmax(self.fusion_weights, dim=0)
+        return {
+            'visual_weight': weights[0].item(),
+            'pose_weight': weights[1].item()
+        }
+
+
+class UnifiedSASLRecognizer:
+    """Real-time SASL recognition using unified multi-modal model"""
+    
+    def __init__(self, model_path, class_names_path, sequence_length=30, confidence_threshold=0.7):
+        self.sequence_length = sequence_length
+        self.confidence_threshold = confidence_threshold
+        self.input_size = (224, 224)
+        
+        # Load class names
+        with open(class_names_path, 'r') as f:
+            self.class_names = json.load(f)
+        self.num_classes = len(self.class_names)
+        
+        print(f"Unified SASL Recognizer initialized")
+        print(f"  Classes: {self.num_classes}")
+        print(f"  Sequence length: {self.sequence_length}")
+        print(f"  Confidence threshold: {self.confidence_threshold}")
+        
+        # Initialize device
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        print(f"  Device: {self.device}")
+        
+        # Load unified model
+        self.model = UnifiedSASLModel(
+            num_classes=self.num_classes,
+            sequence_length=self.sequence_length,
+            input_size=self.input_size
+        ).to(self.device)
+        
+        # Load trained weights
+        if Path(model_path).exists():
+            print(f"  Loading model weights from: {model_path}")
+            self.model.load_state_dict(torch.load(model_path, map_location=self.device))
+            self.model.eval()
+            
+            # Print learned fusion weights
+            fusion_weights = self.model.get_fusion_weights()
+            print(f"  Learned fusion weights - Visual: {fusion_weights['visual_weight']:.3f}, Pose: {fusion_weights['pose_weight']:.3f}")
+        else:
+            print(f"  WARNING: Model file not found: {model_path}")
+            print(f"  Using randomly initialized model")
+        
+        # Initialize MediaPipe
+        self.mp_pose = mp.solutions.pose
+        self.pose = self.mp_pose.Pose(
+            static_image_mode=False,
+            model_complexity=2,  # Higher accuracy
+            enable_segmentation=False,
+            min_detection_confidence=0.7,
+            min_tracking_confidence=0.5
+        )
+        self.mp_drawing = mp.solutions.drawing_utils
+        
+        # Initialize sequence buffers
+        self.frame_buffer = deque(maxlen=sequence_length)
+        self.pose_buffer = deque(maxlen=sequence_length)
+        
+        # Prediction smoothing
+        self.prediction_buffer = deque(maxlen=5)  # Last 5 predictions for smoothing
+        
+        print("Unified SASL Recognizer ready!")
+    
+    def extract_pose_landmarks(self, image):
+        """Extract pose landmarks using MediaPipe"""
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        results = self.pose.process(image_rgb)
+        
+        if results.pose_landmarks:
+            # Extract 3D landmarks (x, y, z for 33 points + visibility)
+            landmarks = []
+            for landmark in results.pose_landmarks.landmark:
+                landmarks.extend([
+                    landmark.x,  # Normalized x coordinate
+                    landmark.y,  # Normalized y coordinate  
+                    landmark.z,  # Relative depth
+                    landmark.visibility  # Visibility score
+                ])
+            
+            # Additional computed features
+            # 1. Hand-related landmarks (more important for sign language)
+            left_wrist = results.pose_landmarks.landmark[self.mp_pose.PoseLandmark.LEFT_WRIST]
+            right_wrist = results.pose_landmarks.landmark[self.mp_pose.PoseLandmark.RIGHT_WRIST]
+            left_elbow = results.pose_landmarks.landmark[self.mp_pose.PoseLandmark.LEFT_ELBOW]
+            right_elbow = results.pose_landmarks.landmark[self.mp_pose.PoseLandmark.RIGHT_ELBOW]
+            left_shoulder = results.pose_landmarks.landmark[self.mp_pose.PoseLandmark.LEFT_SHOULDER]
+            right_shoulder = results.pose_landmarks.landmark[self.mp_pose.PoseLandmark.RIGHT_SHOULDER]
+            
+            # Compute relative positions and angles
+            additional_features = [
+                # Hand positions relative to shoulders
+                left_wrist.x - left_shoulder.x,
+                left_wrist.y - left_shoulder.y,
+                right_wrist.x - right_shoulder.x,
+                right_wrist.y - right_shoulder.y,
+                
+                # Arm angles (approximate)
+                left_elbow.x - left_shoulder.x,
+                left_elbow.y - left_shoulder.y,
+                right_elbow.x - right_shoulder.x,
+                right_elbow.y - right_shoulder.y,
+                
+                # Distance between hands
+                abs(left_wrist.x - right_wrist.x),
+                abs(left_wrist.y - right_wrist.y),
+                
+                # Body orientation features
+                (left_shoulder.x + right_shoulder.x) / 2,  # Body center x
+                (left_shoulder.y + right_shoulder.y) / 2,  # Body center y
+                
+                # Movement indicators (will be zero for single frame, computed during sequence processing)
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,  # 10 placeholders for movement features
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0  # 9 more to reach 225 total
+            ]
+            
+            landmarks.extend(additional_features)
+            
+            # Ensure exactly 225 features (33 * 4 + 93 = 225)
+            while len(landmarks) < 225:
+                landmarks.append(0.0)
+            landmarks = landmarks[:225]  # Truncate if too many
+            
+            return np.array(landmarks, dtype=np.float32), True
+        else:
+            # Return zeros if no pose detected
+            return np.zeros(225, dtype=np.float32), False
+    
+    def preprocess_frame(self, frame):
+        """Preprocess frame for CNN input"""
+        # Resize and normalize
+        frame_resized = cv2.resize(frame, self.input_size)
+        frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
+        frame_normalized = frame_rgb.astype(np.float32) / 255.0
+        
+        # Convert to PyTorch format (C, H, W)
+        frame_tensor = torch.from_numpy(frame_normalized.transpose(2, 0, 1))
+        
+        return frame_tensor
+    
+    def update_buffers(self, frame, pose_landmarks):
+        """Update sequence buffers with new frame and pose data"""
+        # Preprocess frame
+        processed_frame = self.preprocess_frame(frame)
+        
+        # Add to buffers
+        self.frame_buffer.append(processed_frame)
+        self.pose_buffer.append(pose_landmarks)
+    
+    def predict(self):
+        """Make prediction using current sequence buffers"""
+        if len(self.frame_buffer) < self.sequence_length:
+            return None, 0.0, None
+        
+        # Prepare batch data
+        frames = torch.stack(list(self.frame_buffer)).unsqueeze(0)  # (1, seq_len, C, H, W)
+        poses = torch.stack([torch.from_numpy(pose) for pose in self.pose_buffer]).unsqueeze(0)  # (1, seq_len, pose_dim)
+        
+        # Move to device
+        frames = frames.to(self.device)
+        poses = poses.to(self.device)
+        
+        # Make prediction
+        with torch.no_grad():
+            logits = self.model(frames, poses)
+            probabilities = torch.softmax(logits, dim=1)
+            confidence, predicted_idx = torch.max(probabilities, 1)
+            
+            predicted_class = self.class_names[predicted_idx.item()]
+            confidence_score = confidence.item()
+            
+            # Get current fusion weights for display
+            fusion_weights = self.model.get_fusion_weights()
+            
+            return predicted_class, confidence_score, fusion_weights
+    
+    def smooth_prediction(self, prediction, confidence):
+        """Apply temporal smoothing to predictions"""
+        if prediction is None:
+            return None, 0.0
+        
+        self.prediction_buffer.append((prediction, confidence))
+        
+        if len(self.prediction_buffer) < 3:  # Need at least 3 predictions
+            return prediction, confidence
+        
+        # Find most common prediction in buffer
+        predictions = [pred for pred, conf in self.prediction_buffer]
+        confidences = [conf for pred, conf in self.prediction_buffer]
+        
+        # Simple voting - most frequent prediction
+        from collections import Counter
+        prediction_counts = Counter(predictions)
+        most_common_pred = prediction_counts.most_common(1)[0][0]
+        
+        # Average confidence for the most common prediction
+        avg_confidence = np.mean([conf for pred, conf in self.prediction_buffer if pred == most_common_pred])
+        
+        return most_common_pred, avg_confidence
+    
+    def run_camera(self, camera_index=0):
+        """Run real-time recognition from camera"""
+        cap = cv2.VideoCapture(camera_index)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        cap.set(cv2.CAP_PROP_FPS, 30)
+        
+        print(f"\\nStarting camera recognition...")
+        print(f"Press 'q' to quit, 's' to screenshot")
+        
+        frame_count = 0
+        fps_start_time = time.time()
+        
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                print("Failed to read from camera")
+                break
+            
+            frame_count += 1
+            
+            # Mirror the frame for better user experience
+            frame = cv2.flip(frame, 1)
+            
+            # Extract pose landmarks
+            pose_landmarks, pose_detected = self.extract_pose_landmarks(frame)
+            
+            # Update buffers
+            self.update_buffers(frame, pose_landmarks)
+            
+            # Make prediction if we have enough frames
+            prediction, confidence, fusion_weights = self.predict()
+            
+            # Apply smoothing
+            if prediction is not None and confidence > self.confidence_threshold:
+                smooth_pred, smooth_conf = self.smooth_prediction(prediction, confidence)
+            else:
+                smooth_pred, smooth_conf = None, 0.0
+            
+            # Draw pose landmarks
+            if pose_detected:
+                image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                results = self.pose.process(image_rgb)
+                if results.pose_landmarks:
+                    self.mp_drawing.draw_landmarks(
+                        frame, results.pose_landmarks, self.mp_pose.POSE_CONNECTIONS,
+                        self.mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2),
+                        self.mp_drawing.DrawingSpec(color=(0, 0, 255), thickness=2)
+                    )
+            
+            # Calculate FPS
+            if frame_count % 30 == 0:
+                fps = 30 / (time.time() - fps_start_time)
+                fps_start_time = time.time()
+            else:
+                fps = 0
+            
+            # Draw information on frame
+            self.draw_info(frame, smooth_pred, smooth_conf, pose_detected, fusion_weights, fps)
+            
+            # Show frame
+            cv2.imshow('Unified SASL Recognition', frame)
+            
+            # Handle key presses
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'):
+                break
+            elif key == ord('s'):
+                screenshot_path = f"screenshot_{int(time.time())}.jpg"
+                cv2.imwrite(screenshot_path, frame)
+                print(f"Screenshot saved: {screenshot_path}")
+        
+        cap.release()
+        cv2.destroyAllWindows()
+    
+    def draw_info(self, frame, prediction, confidence, pose_detected, fusion_weights, fps):
+        """Draw prediction and status information on frame"""
+        h, w = frame.shape[:2]
+        
+        # Create info panel
+        panel_height = 120
+        panel = np.zeros((panel_height, w, 3), dtype=np.uint8)
+        
+        # Status indicators
+        status_y = 25
+        cv2.putText(panel, f"Pose: {'OK' if pose_detected else 'NO'}", 
+                   (10, status_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, 
+                   (0, 255, 0) if pose_detected else (0, 0, 255), 2)
+        
+        cv2.putText(panel, f"Buffer: {len(self.frame_buffer)}/{self.sequence_length}", 
+                   (120, status_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        
+        if fps > 0:
+            cv2.putText(panel, f"FPS: {fps:.1f}", 
+                       (280, status_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        
+        # Prediction
+        pred_y = 55
+        if prediction and confidence > self.confidence_threshold:
+            cv2.putText(panel, f"Sign: {prediction}", 
+                       (10, pred_y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            cv2.putText(panel, f"Confidence: {confidence:.2f}", 
+                       (10, pred_y + 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        else:
+            cv2.putText(panel, "Detecting...", 
+                       (10, pred_y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+        
+        # Fusion weights
+        if fusion_weights:
+            cv2.putText(panel, f"Visual: {fusion_weights['visual_weight']:.2f} | Pose: {fusion_weights['pose_weight']:.2f}", 
+                       (300, pred_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+        
+        # Instructions
+        cv2.putText(panel, "Press 'q' to quit, 's' for screenshot", 
+                   (10, 105), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+        
+        # Combine frame and panel
+        combined = np.vstack([frame, panel])
+        frame[:] = combined[:h]  # Update original frame
+
 
 class SASLCameraRecognition:
     """
-    Real-time SASL recognition using PyTorch models
+    Backward-compatible wrapper for the unified SASL recognizer
+    Maintains the same interface as the original dual-model system
     """
     
     def __init__(self, cnn_model_path, pose_model_path, classes_path, 
                  sequence_length=30, input_size=(224, 224), confidence_threshold=0.3, 
                  show_overlays=True, minimal_ui=False):
         """
-        Initialize the PyTorch-based camera recognition system
-        
-        Args:
-            cnn_model_path: Path to CNN+LSTM PyTorch model (.pth)
-            pose_model_path: Path to Pose LSTM PyTorch model (.pth) 
-            classes_path: Path to class names JSON file
-            sequence_length: Number of frames for temporal modeling
-            input_size: Input image size for CNN
-            confidence_threshold: Minimum confidence for predictions
-            show_overlays: Whether to show MediaPipe landmarks and detailed UI
-            minimal_ui: If True, only show main prediction, no additional overlays
+        Initialize using the old interface but internally use the unified model
         """
-        self.sequence_length = sequence_length
-        self.input_size = input_size
-        self.confidence_threshold = confidence_threshold
-        self.show_overlays = False  # Default to clean mode (no MediaPipe overlays)
-        self.minimal_ui = True      # Default to minimal/clean UI
+        print("Initializing backward-compatible SASL Camera Recognition")
+        print("Note: Using unified model for both CNN and Pose processing")
         
-        # Load class names
-        with open(classes_path, 'r') as f:
-            self.class_names = json.load(f)
-        self.num_classes = len(self.class_names)
-        
-        print(f"Initializing PyTorch SASL Camera Recognition")
-        print(f"Device: {device}")
-        print(f"Classes: {self.num_classes}")
-        print(f"Sequence length: {sequence_length}")
-        print(f"Input size: {input_size}")
-        
-        # Load PyTorch models
-        print("Loading PyTorch models...")
-        
-        try:
-            # CNN+LSTM Model
-            print(f"Loading CNN+LSTM model from: {cnn_model_path}")
-            self.cnn_model = CNNLSTMModel(self.num_classes, sequence_length, input_size)
-            cnn_state_dict = torch.load(cnn_model_path, map_location=device)
-            self.cnn_model.load_state_dict(cnn_state_dict)
-            self.cnn_model.to(device)
-            self.cnn_model.eval()
-            print("CNN+LSTM model loaded successfully")
-            
-        except Exception as e:
-            raise RuntimeError(f"Failed to load CNN+LSTM model: {e}")
-        
-        try:
-            # Pose LSTM Model  
-            print(f"Loading Pose LSTM model from: {pose_model_path}")
-            self.pose_model = PoseLSTMModel(self.num_classes, sequence_length)
-            pose_state_dict = torch.load(pose_model_path, map_location=device)
-            self.pose_model.load_state_dict(pose_state_dict)
-            self.pose_model.to(device)
-            self.pose_model.eval()
-            print("Pose LSTM model loaded successfully")
-            
-        except Exception as e:
-            raise RuntimeError(f"Failed to load Pose LSTM model: {e}")
-        
-        print("All PyTorch models loaded successfully")
-        
-        # Initialize MediaPipe
-        print("Initializing MediaPipe...")
-        try:
-            self.mp_pose = mp.solutions.pose
-            self.mp_hands = mp.solutions.hands
-            self.mp_drawing = mp.solutions.drawing_utils
-            self.mp_drawing_styles = mp.solutions.drawing_styles
-            
-            self.pose_detector = self.mp_pose.Pose(
-                static_image_mode=False,
-                model_complexity=1,
-                smooth_landmarks=True,
-                enable_segmentation=False,
-                min_detection_confidence=0.5,
-                min_tracking_confidence=0.5
-            )
-            
-            self.hand_detector = self.mp_hands.Hands(
-                static_image_mode=False,
-                max_num_hands=2,
-                model_complexity=1,
-                min_detection_confidence=0.5,
-                min_tracking_confidence=0.5
-            )
-            
-            print("MediaPipe initialized successfully")
-            
-        except Exception as e:
-            raise RuntimeError(f"Failed to initialize MediaPipe: {e}")
-        
-        # Frame buffers for temporal modeling
-        self.frame_buffer = deque(maxlen=sequence_length)
-        self.pose_buffer = deque(maxlen=sequence_length)
-        
-        # Prediction smoothing
-        self.prediction_buffer = deque(maxlen=5)  # Smooth over 5 predictions
-        
-        print("Camera recognition system ready!")
-    
-    def extract_pose_landmarks(self, rgb_frame):
-        """Extract pose and hand landmarks from frame"""
-        landmarks = []
-        
-        # Process pose and hands
-        pose_results = self.pose_detector.process(rgb_frame)
-        hand_results = self.hand_detector.process(rgb_frame)
-        
-        # Add pose landmarks (33 points × 3 coordinates = 99 features)
-        if pose_results.pose_landmarks:
-            for landmark in pose_results.pose_landmarks.landmark:
-                landmarks.extend([landmark.x, landmark.y, landmark.z])
-        else:
-            landmarks.extend([0.0] * 99)
-        
-        # Add hand landmarks (2 hands × 21 points × 3 coordinates = 126 features)
-        hands_added = 0
-        if hand_results.multi_hand_landmarks:
-            for hand_landmarks in hand_results.multi_hand_landmarks:
-                if hands_added < 2:
-                    for landmark in hand_landmarks.landmark:
-                        landmarks.extend([landmark.x, landmark.y, landmark.z])
-                    hands_added += 1
-        
-        # Pad with zeros if less than 2 hands detected
-        while hands_added < 2:
-            landmarks.extend([0.0] * 63)  # 21 points × 3 coordinates
-            hands_added += 1
-        
-        return landmarks[:225], pose_results, hand_results  # Ensure consistent size
-    
-    def predict_sign(self):
-        """Make prediction using both models"""
-        if len(self.frame_buffer) < self.sequence_length:
-            return None, None, []
-        
-        # Prepare video sequence for CNN+LSTM
-        video_sequence = np.array(list(self.frame_buffer)) / 255.0
-        video_tensor = torch.FloatTensor(video_sequence).unsqueeze(0).permute(0, 1, 4, 2, 3).to(device)
-        
-        # Prepare pose sequence for Pose LSTM
-        pose_sequence = np.array(list(self.pose_buffer))
-        pose_tensor = torch.FloatTensor(pose_sequence).unsqueeze(0).to(device)
-        
-        with torch.no_grad():
-            # CNN+LSTM prediction
-            cnn_outputs = self.cnn_model(video_tensor)
-            cnn_probs = torch.softmax(cnn_outputs, dim=1)
-            
-            # Pose LSTM prediction
-            pose_outputs = self.pose_model(pose_tensor)
-            pose_probs = torch.softmax(pose_outputs, dim=1)
-            
-            # Ensemble prediction (average probabilities)
-            ensemble_probs = (cnn_probs + pose_probs) / 2
-            
-            # Get top-3 predictions
-            top3_probs, top3_indices = torch.topk(ensemble_probs, 3, dim=1)
-            
-            top3_predictions = []
-            for i in range(3):
-                class_idx = top3_indices[0, i].item()
-                confidence = top3_probs[0, i].item()
-                class_name = self.class_names[class_idx]
-                top3_predictions.append((class_name, confidence))
-            
-            # Best prediction
-            best_class = top3_predictions[0][0]
-            best_confidence = top3_predictions[0][1]
-            
-            return best_class, best_confidence, top3_predictions
-    
-    def smooth_prediction(self, prediction, confidence):
-        """Smooth predictions over time to reduce flicker"""
-        self.prediction_buffer.append((prediction, confidence))
-        
-        if len(self.prediction_buffer) < 3:
-            return prediction, confidence
-        
-        # Count occurrences of each prediction
-        prediction_counts = {}
-        total_confidence = 0
-        
-        for pred, conf in self.prediction_buffer:
-            if pred not in prediction_counts:
-                prediction_counts[pred] = []
-            prediction_counts[pred].append(conf)
-            total_confidence += conf
-        
-        # Find most frequent prediction with highest average confidence
-        best_pred = None
-        best_score = 0
-        
-        for pred, confidences in prediction_counts.items():
-            avg_confidence = sum(confidences) / len(confidences)
-            frequency_score = len(confidences) / len(self.prediction_buffer)
-            combined_score = avg_confidence * frequency_score
-            
-            if combined_score > best_score:
-                best_score = combined_score
-                best_pred = pred
-        
-        return best_pred, best_score
-    
-    def draw_landmarks(self, frame, pose_results, hand_results):
-        """Draw MediaPipe landmarks on frame"""
-        if not self.show_overlays:
-            return
-            
-        # Draw pose landmarks
-        if pose_results.pose_landmarks:
-            self.mp_drawing.draw_landmarks(
-                frame,
-                pose_results.pose_landmarks,
-                self.mp_pose.POSE_CONNECTIONS,
-                landmark_drawing_spec=self.mp_drawing_styles.get_default_pose_landmarks_style()
-            )
-        
-        # Draw hand landmarks
-        if hand_results.multi_hand_landmarks:
-            for hand_landmarks in hand_results.multi_hand_landmarks:
-                self.mp_drawing.draw_landmarks(
-                    frame,
-                    hand_landmarks,
-                    self.mp_hands.HAND_CONNECTIONS,
-                    self.mp_drawing_styles.get_default_hand_landmarks_style(),
-                    self.mp_drawing_styles.get_default_hand_connections_style()
-                )
-    
-    def draw_predictions(self, frame, best_prediction, best_confidence, top3_predictions):
-        """Draw prediction results on frame - continuously show top 3 predictions"""
-        height, width = frame.shape[:2]
-        
-        # If minimal UI mode, show compact top 3 predictions
-        if self.minimal_ui:
-            if top3_predictions:
-                # Compact display for minimal UI
-                for i, (pred, conf) in enumerate(top3_predictions):
-                    y_pos = 30 + i * 25
-                    text = f"{i+1}. {pred}: {conf:.4f}"
-                    
-                    # Color coding
-                    if i == 0:
-                        color = (0, 215, 255)    # Gold
-                    elif i == 1:
-                        color = (192, 192, 192)  # Silver
-                    else:
-                        color = (140, 120, 205)  # Bronze
-                    
-                    cv2.putText(frame, text, (20, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-            return
-        
-        # Full UI mode - always show top 3 predictions continuously (regardless of confidence threshold)
-        if top3_predictions:
-            # Main predictions area - larger and more prominent
-            y_start = 20
-            prediction_height = 140
-            
-            # Background for predictions
-            cv2.rectangle(frame, (10, y_start), (450, y_start + prediction_height), (0, 0, 0), -1)
-            cv2.rectangle(frame, (10, y_start), (450, y_start + prediction_height), (0, 200, 255), 2)
-            
-            # Title
-            cv2.putText(frame, "SASL Sign Recognition - Top 3 Predictions:", 
-                       (20, y_start + 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            
-            # Display all 3 predictions continuously
-            for i, (pred, conf) in enumerate(top3_predictions):
-                y_pos = y_start + 50 + i * 30
-                
-                # Format confidence as decimal value (not percentage)
-                text = f"{i+1}. {pred}: {conf:.4f}"
-                
-                # Color coding: Gold for #1, Silver for #2, Bronze for #3
-                if i == 0:
-                    color = (0, 215, 255)    # Gold
-                    thickness = 2
-                elif i == 1:
-                    color = (192, 192, 192)  # Silver
-                    thickness = 2
-                else:
-                    color = (140, 120, 205)  # Bronze
-                    thickness = 1
-                
-                cv2.putText(frame, text, (25, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.65, color, thickness)
-                
-                # Add confidence bar visualization
-                bar_width = int(300 * conf)  # Scale confidence to bar width
-                bar_x = 25
-                bar_y = y_pos + 5
-                bar_height = 4
-                
-                # Background bar
-                cv2.rectangle(frame, (bar_x, bar_y), (bar_x + 300, bar_y + bar_height), (50, 50, 50), -1)
-                # Confidence bar
-                if bar_width > 0:
-                    cv2.rectangle(frame, (bar_x, bar_y), (bar_x + bar_width, bar_y + bar_height), color, -1)
-        
-        else:
-            # No predictions available yet
-            cv2.rectangle(frame, (10, 20), (450, 80), (0, 0, 0), -1)
-            cv2.rectangle(frame, (10, 20), (450, 80), (0, 0, 255), 2)
-            cv2.putText(frame, "Initializing predictions...", (20, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-        
-        # Compact instructions at bottom
-        if not self.minimal_ui:
-            instructions = [
-                "Controls: Q=Quit | R=Reset | H=Toggle UI | O=Landmarks | C=Clean Mode"
-            ]
-            
-            y_start = height - 40
-            cv2.rectangle(frame, (10, y_start), (width - 10, height - 10), (0, 0, 0), -1)
-            cv2.rectangle(frame, (10, y_start), (width - 10, height - 10), (100, 100, 100), 1)
-            
-            for i, instruction in enumerate(instructions):
-                y_pos = y_start + 20
-                cv2.putText(frame, instruction, (20, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
-    
-    def run_live_recognition(self):
-        """Run live camera recognition"""
-        print("Starting live SASL recognition...")
-        print("DEFAULT MODE: Clean Mode (Minimal UI + No Overlays)")
-        print("Predictions will be shown on screen AND printed to terminal")
-        print("\nControls:")
-        print("  - Hold signs clearly for 1-2 seconds")
-        print("  - Press 'q' to quit")
-        print("  - Press 'r' to reset prediction buffer")
-        print("  - Press 'h' to toggle UI mode (Minimal/Full)")
-        print("  - Press 'o' to toggle MediaPipe overlays")
-        print("  - Press 'c' to toggle clean mode")
-        print(f"\nCurrent UI Mode: {'Minimal (Clean)' if self.minimal_ui else 'Full'}")
-        print(f"MediaPipe Overlays: {'OFF (Clean)' if not self.show_overlays else 'ON'}")
-        
-        # Try different camera indices to find available camera
-        camera_found = False
-        cap = None
-        
-        print("\nSearching for available cameras...")
-        for camera_index in range(5):  # Try camera indices 0-4
-            print(f"Trying camera index {camera_index}...")
-            cap = cv2.VideoCapture(camera_index)
-            
-            if cap.isOpened():
-                # Test if camera actually works by reading a frame
-                ret, test_frame = cap.read()
-                if ret and test_frame is not None:
-                    print(f"Found working camera at index {camera_index}")
-                    camera_found = True
-                    break
-                else:
-                    print(f"Camera {camera_index} opened but can't read frames")
-                    cap.release()
-            else:
-                print(f"Camera {camera_index} failed to open")
-        
-        if not camera_found:
-            print("\n" + "="*60)
-            print("CAMERA ERROR: No working camera found!")
-            print("="*60)
-            print("Possible solutions:")
-            print("1. Check if camera is connected properly")
-            print("2. Close other applications using the camera (Teams, Zoom, etc.)")
-            print("3. Try running as administrator")
-            print("4. Check Windows camera privacy settings:")
-            print("   Settings > Privacy & Security > Camera > Allow apps to access camera")
-            print("5. Update camera drivers")
-            print("6. Try a different USB port")
-            print("7. Restart the computer")
-            print("\nCamera devices tested: indices 0-4")
-            print("="*60)
-            input("\nPress Enter to continue...")  # Don't clear screen
-            return
-        
-        # Set camera properties
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        cap.set(cv2.CAP_PROP_FPS, 30)
-        
-        fps_counter = 0
-        fps_start_time = time.time()
-        
-        try:
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    print("ERROR: Could not read frame")
-                    break
-                
-                # Flip frame horizontally for mirror effect
-                frame = cv2.flip(frame, 1)
-                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                
-                # Resize frame for model input
-                model_frame = cv2.resize(rgb_frame, self.input_size)
-                
-                # Extract landmarks and update buffers
-                landmarks, pose_results, hand_results = self.extract_pose_landmarks(rgb_frame)
-                
-                self.frame_buffer.append(model_frame)
-                self.pose_buffer.append(landmarks)
-                
-                # Make prediction
-                best_prediction, best_confidence, top3_predictions = self.predict_sign()
-                
-                # Print predictions to terminal (every 10 frames to avoid spam)
-                if top3_predictions and fps_counter % 10 == 0:
-                    print(f"\n--- SASL Predictions (Frame {fps_counter}) ---")
-                    for i, (pred, conf) in enumerate(top3_predictions):
-                        rank_number = f"{i+1}."
-                        print(f"{rank_number} {pred}: {conf:.4f}")
-                    print("-" * 45)
-                
-                # Smooth prediction
-                if best_prediction:
-                    best_prediction, best_confidence = self.smooth_prediction(best_prediction, best_confidence)
-                
-                # Draw landmarks
-                self.draw_landmarks(frame, pose_results, hand_results)
-                
-                # Draw predictions
-                self.draw_predictions(frame, best_prediction, best_confidence, top3_predictions)
-                
-                # Calculate and display FPS
-                fps_counter += 1
-                if fps_counter % 30 == 0:
-                    fps_end_time = time.time()
-                    fps = 30 / (fps_end_time - fps_start_time)
-                    fps_start_time = fps_end_time
-                
-                # FPS display
-                cv2.putText(frame, f"FPS: {fps:.1f}" if 'fps' in locals() else "FPS: --", 
-                          (frame.shape[1] - 100, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-                
-                # Display frame
-                cv2.imshow('SASL PyTorch Recognition', frame)
-                
-                # Handle key presses
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord('q'):
-                    break
-                elif key == ord('r'):
-                    # Reset buffers
-                    self.frame_buffer.clear()
-                    self.pose_buffer.clear()
-                    self.prediction_buffer.clear()
-                    print("Buffers reset")
-                elif key == ord('h'):
-                    # Toggle UI mode
-                    self.minimal_ui = not self.minimal_ui
-                    mode = "Minimal" if self.minimal_ui else "Full"
-                    print(f"UI mode switched to: {mode}")
-                elif key == ord('o'):
-                    # Toggle overlays (landmarks)
-                    self.show_overlays = not self.show_overlays
-                    status = "ON" if self.show_overlays else "OFF"
-                    print(f"MediaPipe overlays: {status}")
-                elif key == ord('c'):
-                    # Clean mode - no overlays, minimal UI
-                    self.show_overlays = False
-                    self.minimal_ui = True
-                    print("Clean mode activated - minimal UI, no overlays")
-        
-        except KeyboardInterrupt:
-            print("\nRecognition stopped by user")
-        
-        finally:
-            cap.release()
-            cv2.destroyAllWindows()
-            self.pose_detector.close()
-            self.hand_detector.close()
-            print("Camera recognition finished")
-
-def main():
-    """Main function for testing"""
-    print("Searching for trained PyTorch models...")
-    
-    # Check for the latest training outputs
-    outputs_dir = Path("outputs")
-    model_files = []
-    
-    if outputs_dir.exists():
-        # Find the latest training directory
-        training_dirs = [d for d in outputs_dir.iterdir() if d.is_dir() and d.name.startswith("training_")]
-        if training_dirs:
-            # Sort by name (timestamp) and get the latest
-            latest_training_dir = sorted(training_dirs, key=lambda x: x.name)[-1]
-            print(f"Found latest training session: {latest_training_dir.name}")
-            
-            # Check for models in the latest training directory
-            models_dir = latest_training_dir / "models"
-            results_dir = latest_training_dir / "results"
-            
-            if models_dir.exists() and results_dir.exists():
-                cnn_model_path = models_dir / "best_sasl_cnn_lstm_model.pth"
-                pose_model_path = models_dir / "best_sasl_pose_lstm_model.pth"
-                
-                # Check for class names - try both pytorch_sasl_classes.json and class_names.json
-                classes_path = results_dir / "pytorch_sasl_classes.json"
-                if not classes_path.exists():
-                    classes_path = results_dir / "class_names.json"
-                
-                if cnn_model_path.exists() and pose_model_path.exists() and classes_path.exists():
-                    model_files = [str(cnn_model_path), str(pose_model_path), str(classes_path)]
-                    print(f"Found CNN+LSTM model: {cnn_model_path}")
-                    print(f"Found Pose LSTM model: {pose_model_path}")
-                    print(f"Found class names: {classes_path}")
-                else:
-                    print(f"Missing model files in {models_dir}")
-            else:
-                print(f"Models or results directory not found in {latest_training_dir}")
-        else:
-            print("No training directories found in outputs/")
-    
-    # Fallback: Check for models in root directory or outputs/
-    if not model_files:
-        print("Checking for models in root directory...")
-        fallback_files = [
-            "best_sasl_cnn_lstm_model.pth",
-            "best_sasl_pose_lstm_model.pth", 
-            "pytorch_sasl_classes.json"
-        ]
-        
-        # Check outputs directory first, then root
-        for model_file in fallback_files:
-            if (outputs_dir / model_file).exists():
-                model_files.append(str(outputs_dir / model_file))
-            elif Path(model_file).exists():
-                model_files.append(model_file)
-            else:
-                model_files.append(None)
-        
-        # Check if all files found
-        if None in model_files:
-            missing_files = [f for f, path in zip(fallback_files, model_files) if path is None]
-            print(f"ERROR: Missing PyTorch model files: {missing_files}")
-            print("\nTo fix this issue:")
-            print("1. Run training first: python video_based_sasl_training.py")
-            print("2. Or collect training data: python sasl_video_collector.py")
-            print("3. Make sure training completes successfully")
-            return
-        else:
-            print("Found models in fallback locations")
-    
-    if not model_files or len(model_files) != 3:
-        print("ERROR: Could not locate all required model files")
-        print("\nTo fix this issue:")
-        print("1. Run training first: python video_based_sasl_training.py") 
-        print("2. Or collect training data: python sasl_video_collector.py")
-        print("3. Make sure training completes successfully")
-        return
-    
-    try:
-        print("\nStarting SASL Camera Recognition System...")
-        print("Initializing camera and loading models...")
-        
-        # Initialize and run recognition
-        recognition = SASLCameraRecognition(
-            cnn_model_path=model_files[0],
-            pose_model_path=model_files[1],
-            classes_path=model_files[2]
+        # Use the unified recognizer internally
+        self.unified_recognizer = UnifiedSASLRecognizer(
+            model_path=cnn_model_path,  # Use CNN model path (should be unified model)
+            class_names_path=classes_path,
+            sequence_length=sequence_length,
+            confidence_threshold=confidence_threshold
         )
         
-        print("Models loaded successfully!")
-        print("Starting live recognition...")
-        print("\nControls:")
-        print("   SPACE = Toggle predictions on/off")
-        print("   ESC/Q = Quit")
-        print("   C = Toggle confidence display")
-        print("\nCamera window will open shortly...")
+        self.show_overlays = show_overlays
+        self.minimal_ui = minimal_ui
         
-        recognition.run_live_recognition()
+    def run_live_recognition(self):
+        """Run live recognition using the old method name"""
+        self.unified_recognizer.run_camera()
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Unified SASL Camera Recognition')
+    parser.add_argument('--model', type=str, 
+                       default='05_OUTPUT_GENERATED/models/best_unified_sasl_model.pth',
+                       help='Path to trained unified model')
+    parser.add_argument('--classes', type=str,
+                       default='03_DATA_CONFIG/class_names.json',
+                       help='Path to class names JSON file')
+    parser.add_argument('--camera', type=int, default=0,
+                       help='Camera index (default: 0)')
+    parser.add_argument('--confidence', type=float, default=0.7,
+                       help='Confidence threshold for predictions (default: 0.7)')
+    parser.add_argument('--sequence-length', type=int, default=30,
+                       help='Sequence length for temporal modeling (default: 30)')
+    
+    args = parser.parse_args()
+    
+    # Initialize recognizer
+    try:
+        recognizer = UnifiedSASLRecognizer(
+            model_path=args.model,
+            class_names_path=args.classes,
+            sequence_length=args.sequence_length,
+            confidence_threshold=args.confidence
+        )
+        
+        # Run camera recognition
+        recognizer.run_camera(camera_index=args.camera)
         
     except FileNotFoundError as e:
-        print(f"ERROR: Model file not found: {e}")
-        print("Please check that all model files exist and are accessible")
+        print(f"Error: Required file not found - {e}")
+        print("Make sure you have:")
+        print(f"  - Trained model: {args.model}")
+        print(f"  - Class names: {args.classes}")
     except Exception as e:
-        print(f"ERROR during recognition: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"Error initializing recognizer: {e}")
+
 
 if __name__ == "__main__":
     main()

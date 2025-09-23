@@ -46,7 +46,7 @@ class SASLVideoCollector:
         # Background removal settings
         self.background_removal = background_removal
         self.bg_removal_method = bg_removal_method
-        self.background_color = (0, 255, 0)  # Green screen default
+        self.background_color = (0, 255, 0)
         
         # Create dataset directory
         self.dataset_path.mkdir(exist_ok=True)
@@ -208,7 +208,7 @@ class SASLVideoCollector:
                     quality_score += 5
                     feedback.append("GOOD: Hand articulation")
         else:
-            feedback.append("ERROR: No hands detected")
+            feedback.append("WARNING: No hands detected")
         
         # Pose detection quality (up to 25 points)
         if pose_results.pose_landmarks:
@@ -222,7 +222,7 @@ class SASLVideoCollector:
                 quality_score += 10
                 feedback.append("GOOD: Upper body visible")
         else:
-            feedback.append("ERROR: No body pose detected")
+            feedback.append("WARNING: No body pose detected")
         
         # Lighting and contrast (up to 15 points)
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -819,7 +819,7 @@ class SASLVideoCollector:
             choice = int(input(f"\nSelect class (1-{len(self.existing_classes)}): "))
             if 1 <= choice <= len(self.existing_classes):
                 class_name = self.existing_classes[choice - 1]
-                target = int(input(f"Target number of videos for '{class_name}' (default 15): ") or "15")
+                target = int(input(f"Target number of videos for '{class_name}' (default 30): ") or "30")
                 self.collect_class_videos(class_name, target)
             else:
                 print("Invalid selection!")
@@ -836,8 +836,8 @@ class SASLVideoCollector:
         if class_name in self.existing_classes:
             print(f"Class '{class_name}' already exists!")
             return
-        
-        target = int(input(f"Target number of videos for '{class_name}' (default 15): ") or "15")
+
+        target = int(input(f"Target number of videos for '{class_name}' (default 30): ") or "30")
         final_count = self.collect_class_videos(class_name, target)
         
         if final_count > 0:
@@ -850,9 +850,9 @@ class SASLVideoCollector:
         if not self.existing_classes:
             print("No existing classes found!")
             return
-        
-        target = int(input("Target videos per class (default 15): ") or "15")
-        
+
+        target = int(input("Target videos per class (default 30): ") or "30")
+
         for class_name in self.existing_classes:
             current_count = len(list((self.dataset_path / class_name).glob("*.mp4")))
             if current_count < target:
@@ -1023,13 +1023,13 @@ def main():
     )
     
     if background_removal:
-        print(f"\n✅ Background removal enabled with '{bg_method}' method")
+        print(f"\nBackground removal enabled with '{bg_method}' method")
         print("During recording:")
         print("  - Press 'b' to switch between removal methods")
         print("  - Press 'c' to change background color (solid color mode)")
         print("  - Background removal helps models focus on sign language gestures")
     else:
-        print("\n❌ Background removal disabled - recording with original background")
+        print("\nBackground removal disabled - recording with original background")
     
     # Run interactive menu
     collector.interactive_menu()
