@@ -37,6 +37,7 @@ class SASLLauncher:
         print("3. Real-Time Recognition with Hand Tracking") 
         print("4. Video Analysis & Hand Tracking Demo")
         print("5. System Information")
+        print("6. Speak a transcript sentence (live TTS)")
         print("q. Quit")
         print()
     
@@ -516,10 +517,14 @@ if __name__ == "__main__":
                     print("\nThank you for using SASL Hand Detection System!")
                     break
                 
+                elif choice == '6':
+                    self.run_script('tts_engine_talk.py', 'Text-to-Speech (Speak a transcript sentence)')
+                    break
+                
                 else:
                     print("Invalid choice. Please try again.")
                 
-                if choice not in ['5']:  # Don't pause for info screens
+                if choice not in ['6']:  # Don't pause for info screens
                     input("\nPress Enter to continue...")
                     
             except KeyboardInterrupt:
