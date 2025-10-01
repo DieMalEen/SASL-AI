@@ -80,38 +80,18 @@ def process_single_video(args):
                     cached_data = pickle.load(f)
                     if (cached_data.get('sequence_length') == sequence_length and
                         cached_data.get('input_size') == input_size):
-                        return (video_path, cached_data['video_seq'], cached_data['pose_seq'], True)
+                        return (video_path, cached_data['video_seq'], True)
             except:
                 pass  # Cache corrupted, process normally
         
-        # Initialize MediaPipe
-        mp_pose = mp.solutions.pose
-        mp_hands = mp.solutions.hands
-        
-        pose_detector = mp_pose.Pose(
-            static_image_mode=False,
-            model_complexity=1,
-            smooth_landmarks=True,
-            enable_segmentation=False,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5
-        )
-        
-        hand_detector = mp_hands.Hands(
-            static_image_mode=False,
-            max_num_hands=2,
-            model_complexity=1,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5
-        )
+        # No MediaPipe needed for CNN-only training
         
         # Process video
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
-            return (video_path, None, None, False)
+            return (video_path, None, False)
         
         frames = []
-        pose_sequence = []
         
         while True:
             ret, frame = cap.read()
@@ -122,35 +102,6 @@ def process_single_video(args):
             frame = cv2.resize(frame, input_size)
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             frames.append(rgb_frame)
-            
-            # Process pose and hands
-            pose_results = pose_detector.process(rgb_frame)
-            hand_results = hand_detector.process(rgb_frame)
-            
-            landmarks = []
-            
-            # Add pose landmarks (33 points × 3 coordinates = 99 features)
-            if pose_results.pose_landmarks:
-                for landmark in pose_results.pose_landmarks.landmark:
-                    landmarks.extend([landmark.x, landmark.y, landmark.z])
-            else:
-                landmarks.extend([0.0] * 99)
-            
-            # Add hand landmarks (2 hands × 21 points × 3 coordinates = 126 features)
-            hands_added = 0
-            if hand_results.multi_hand_landmarks:
-                for hand_landmarks in hand_results.multi_hand_landmarks:
-                    if hands_added < 2:
-                        for landmark in hand_landmarks.landmark:
-                            landmarks.extend([landmark.x, landmark.y, landmark.z])
-                        hands_added += 1
-            
-            # Pad with zeros if less than 2 hands detected
-            while hands_added < 2:
-                landmarks.extend([0.0] * 63)  # 21 points × 3 coordinates
-                hands_added += 1
-            
-            pose_sequence.append(landmarks[:225])  # Ensure consistent size
         
         cap.release()
         
@@ -171,13 +122,11 @@ def process_single_video(args):
                 pose_sequence.append(pose_sequence[-1])
         
         video_seq = np.array(frames) / 255.0
-        pose_seq = np.array(pose_sequence)
         
         # Cache the results
         try:
             cached_data = {
                 'video_seq': video_seq,
-                'pose_seq': pose_seq,
                 'sequence_length': sequence_length,
                 'input_size': input_size
             }
@@ -186,22 +135,17 @@ def process_single_video(args):
         except:
             pass  # Ignore cache save errors
         
-        # Cleanup
-        pose_detector.close()
-        hand_detector.close()
-        
-        return (video_path, video_seq, pose_seq, False)
+        return (video_path, video_seq, False)
         
     except Exception as e:
         print(f"Error processing {video_path}: {e}")
-        return (video_path, None, None, False)
+        return (video_path, None, False)
 
 class SASLVideoDataset(Dataset):
     """PyTorch Dataset for SASL video sequences"""
     
-    def __init__(self, video_sequences, pose_sequences, labels, transform=None, augment_factor=0):
+    def __init__(self, video_sequences, labels, transform=None, augment_factor=0):
         self.video_sequences = video_sequences
-        self.pose_sequences = pose_sequences
         self.labels = labels
         self.transform = transform
         self.augment_factor = augment_factor
@@ -216,27 +160,19 @@ class SASLVideoDataset(Dataset):
         
         original_count = len(self.video_sequences)
         augmented_videos = list(self.video_sequences)
-        augmented_poses = list(self.pose_sequences)
         augmented_labels = list(self.labels)
         
         for i in tqdm(range(original_count), desc="Augmenting data"):
             video_seq = self.video_sequences[i]
-            pose_seq = self.pose_sequences[i]
             label = self.labels[i]
             
             for _ in range(self.augment_factor):
                 # Augment video sequence
                 aug_video = self._augment_video_sequence(video_seq)
                 augmented_videos.append(aug_video)
-                
-                # Augment pose sequence
-                aug_pose = self._augment_pose_sequence(pose_seq)
-                augmented_poses.append(aug_pose)
-                
                 augmented_labels.append(label)
         
         self.video_sequences = augmented_videos
-        self.pose_sequences = augmented_poses
         self.labels = augmented_labels
         
         print(f"Augmentation complete: {original_count} -> {len(self.video_sequences)} videos")
@@ -291,29 +227,11 @@ class SASLVideoDataset(Dataset):
         
         return augmented_sequence
     
-    def _augment_pose_sequence(self, pose_sequence):
-        """Apply augmentation to pose landmarks"""
-        augmented_pose = pose_sequence.copy()
-        
-        # Add small noise to pose landmarks
-        noise_std = 0.02
-        noise = np.random.normal(0, noise_std, augmented_pose.shape)
-        
-        # Only add noise to non-zero landmarks
-        mask = augmented_pose != 0
-        augmented_pose[mask] += noise[mask]
-        
-        # Ensure landmarks stay in valid range [0, 1]
-        augmented_pose = np.clip(augmented_pose, 0, 1)
-        
-        return augmented_pose
-    
     def __len__(self):
         return len(self.video_sequences)
     
     def __getitem__(self, idx):
         video = torch.FloatTensor(self.video_sequences[idx]).permute(0, 3, 1, 2)  # (seq, C, H, W)
-        pose = torch.FloatTensor(self.pose_sequences[idx])
         label = torch.LongTensor([self.labels[idx]])
         
         if self.transform:
@@ -323,7 +241,7 @@ class SASLVideoDataset(Dataset):
                 transformed_frames.append(self.transform(frame))
             video = torch.stack(transformed_frames)
         
-        return video, pose, label.squeeze()
+        return video, label.squeeze()
 
 class CNNLSTMModel(nn.Module):
     """CNN+LSTM model for video classification using PyTorch"""
@@ -535,7 +453,6 @@ class VideoSASLTrainer:
         print(f"\nProcessing {len(all_video_tasks)} videos with {self.num_workers} workers...")
         
         video_sequences = []
-        pose_sequences = []
         labels = []
         cached_count = 0
         processed_count = 0
@@ -548,11 +465,10 @@ class VideoSASLTrainer:
                      bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]") as pbar:
                 
                 for future in as_completed(futures):
-                    video_path, video_seq, pose_seq, was_cached = future.result()
+                    video_path, video_seq, was_cached = future.result()
                     
-                    if video_seq is not None and pose_seq is not None:
+                    if video_seq is not None:
                         video_sequences.append(video_seq)
-                        pose_sequences.append(pose_seq)
                         
                         # Determine label from path
                         class_name = Path(video_path).parent.name
@@ -575,7 +491,7 @@ class VideoSASLTrainer:
         print(f"  Total loaded: {len(video_sequences)} videos")
         print(f"  Classes: {len(class_names)}")
         
-        return video_sequences, pose_sequences, labels, class_names
+        return video_sequences, labels, class_names
     
     def create_output_directories(self):
         """Create organized output directory structure"""
