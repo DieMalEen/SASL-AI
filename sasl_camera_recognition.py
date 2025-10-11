@@ -8,7 +8,7 @@ Provides live camera feed with sign recognition, confidence scores, and visual f
 
 Features:
 - Real-time video processing with PyTorch models
-- CNN+LSTM and Pose LSTM ensemble predictions
+- CNN+LSTM ensemble predictions
 - MediaPipe pose/hand landmark overlay
 - Confidence-based prediction filtering
 - Top-3 predictions display

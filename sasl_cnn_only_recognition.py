@@ -24,76 +24,20 @@ import time
 from collections import deque
 import timm
 
+# Import the model from training file to ensure compatibility
+try:
+    from video_cnn_only_training import CNNLSTMModel
+    print("✓ Successfully imported CNNLSTMModel from training module")
+except ImportError as e:
+    print(f"⚠️  Could not import CNNLSTMModel from training module: {e}")
+    print("   Using local model definition (may cause compatibility issues)")
+    CNNLSTMModel = None
+
 # Set device
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-class CNNLSTMModel(nn.Module):
-    """CNN+LSTM model for video classification using PyTorch"""
-    
-    def __init__(self, num_classes, sequence_length=30, input_size=(224, 224)):
-        super(CNNLSTMModel, self).__init__()
-        
-        self.sequence_length = sequence_length
-        self.input_size = input_size
-        self.num_classes = num_classes
-        
-        # Pre-trained CNN backbone (EfficientNet)
-        self.backbone = timm.create_model('efficientnet_b0', pretrained=True, num_classes=0)
-        
-        # Freeze backbone for transfer learning
-        for param in self.backbone.parameters():
-            param.requires_grad = False
-        
-        # Get feature dimension from backbone
-        feature_dim = self.backbone.num_features
-        
-        # Temporal processing layers
-        self.temporal_conv = nn.Conv1d(feature_dim, 512, kernel_size=3, padding=1)
-        self.temporal_bn = nn.BatchNorm1d(512)
-        self.dropout1 = nn.Dropout(0.3)
-        
-        # LSTM layers
-        self.lstm1 = nn.LSTM(512, 256, bidirectional=True, batch_first=True, dropout=0.3)
-        self.lstm2 = nn.LSTM(512, 128, bidirectional=True, batch_first=True, dropout=0.3)
-        
-        # Classification layers
-        self.classifier = nn.Sequential(
-            nn.Linear(256, 256),
-            nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(128, num_classes)
-        )
-    
-    def forward(self, x):
-        batch_size, seq_len, c, h, w = x.size()
-        
-        # Process each frame through CNN
-        x = x.view(-1, c, h, w)  # (batch*seq, c, h, w)
-        features = self.backbone(x)  # (batch*seq, feature_dim)
-        
-        # Reshape back to sequence
-        features = features.view(batch_size, seq_len, -1)  # (batch, seq, feature_dim)
-        
-        # Temporal convolution
-        x = features.transpose(1, 2)  # (batch, feature_dim, seq)
-        x = torch.relu(self.temporal_bn(self.temporal_conv(x)))
-        x = self.dropout1(x)
-        x = x.transpose(1, 2)  # (batch, seq, 512)
-        
-        # LSTM layers
-        x, _ = self.lstm1(x)  # (batch, seq, 512)
-        x, _ = self.lstm2(x)  # (batch, seq, 256)
-        
-        # Global average pooling over sequence
-        x = torch.mean(x, dim=1)  # (batch, 256)
-        
-        # Classification
-        x = self.classifier(x)
-        
-        return x
+# Model definition is now imported from video_cnn_only_training.py
+# This ensures compatibility between training and inference
 
 class SASLCNNOnlyCameraRecognition:
     """
@@ -127,12 +71,30 @@ class SASLCNNOnlyCameraRecognition:
         print(f"Sequence length: {sequence_length}")
         print(f"Input size: {input_size}")
         
-        # Load CNN+LSTM Model
+        # Load CNN+LSTM Model with error handling
         print("Loading CNN+LSTM model...")
-        self.model = CNNLSTMModel(self.num_classes, sequence_length, input_size)
-        self.model.load_state_dict(torch.load(model_path, map_location=device))
-        self.model.to(device)
-        self.model.eval()
+        
+        if CNNLSTMModel is None:
+            raise ImportError("Could not import CNNLSTMModel. Please ensure video_cnn_only_training.py is available.")
+        
+        try:
+            self.model = CNNLSTMModel(self.num_classes, sequence_length, input_size)
+            
+            # Load model state with proper error handling
+            if not Path(model_path).exists():
+                raise FileNotFoundError(f"Model file not found: {model_path}")
+            
+            print(f"Loading model weights from: {model_path}")
+            state_dict = torch.load(model_path, map_location=device)
+            self.model.load_state_dict(state_dict)
+            self.model.to(device)
+            self.model.eval()
+            
+            print("✓ CNN+LSTM model loaded successfully")
+            
+        except Exception as e:
+            print(f"❌ Error loading model: {e}")
+            raise
         
         print("CNN+LSTM model loaded successfully")
         
@@ -345,7 +307,18 @@ class SASLCNNOnlyCameraRecognition:
 
 def main():
     """Main function for testing"""
+    print("SASL CNN-Only Camera Recognition System")
+    print("=" * 50)
     print("Searching for trained CNN+LSTM model...")
+    
+    # Check if we can import the model
+    if CNNLSTMModel is None:
+        print("❌ ERROR: Could not import CNNLSTMModel from training module")
+        print("\nTo fix this issue:")
+        print("1. Make sure video_cnn_only_training.py exists")
+        print("2. Make sure you're running from the correct directory")
+        print("3. Check that the training module is not corrupted")
+        return
     
     # Check for the latest training outputs
     outputs_dir = Path("outputs")

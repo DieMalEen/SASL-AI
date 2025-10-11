@@ -351,6 +351,242 @@ class CNNOnlyVideoSASLTrainer:
         # Create dataset directory
         self.video_dataset_path.mkdir(exist_ok=True)
     
+    def plot_training_history(self, training_history):
+        """Generate training and validation accuracy/loss plots"""
+        print("\nCreating training history plots...")
+        
+        # Create figure with subplots
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
+        
+        epochs = range(1, len(training_history['train_loss']) + 1)
+        
+        # Plot training and validation loss
+        ax1.plot(epochs, training_history['train_loss'], 'bo-', label='Training Loss', linewidth=2, markersize=6)
+        ax1.plot(epochs, training_history['val_loss'], 'ro-', label='Validation Loss', linewidth=2, markersize=6)
+        ax1.set_title('CNN+LSTM Training and Validation Loss', fontsize=14, fontweight='bold')
+        ax1.set_xlabel('Epochs', fontsize=12)
+        ax1.set_ylabel('Loss', fontsize=12)
+        ax1.legend(fontsize=11)
+        ax1.grid(True, alpha=0.3)
+        
+        # Plot training and validation accuracy
+        ax2.plot(epochs, training_history['train_acc'], 'bo-', label='Training Accuracy', linewidth=2, markersize=6)
+        ax2.plot(epochs, training_history['val_acc'], 'ro-', label='Validation Accuracy', linewidth=2, markersize=6)
+        ax2.set_title('CNN+LSTM Training and Validation Accuracy', fontsize=14, fontweight='bold')
+        ax2.set_xlabel('Epochs', fontsize=12)
+        ax2.set_ylabel('Accuracy (%)', fontsize=12)
+        ax2.legend(fontsize=11)
+        ax2.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        
+        # Save the plot
+        plot_filename = self.output_dir / "plots" / "cnn_lstm_training_history.png"
+        plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        print(f"  ✓ Training history plot saved: {plot_filename}")
+        return str(plot_filename)
+    
+    def generate_confusion_matrix(self, model, data_loader, class_names):
+        """Generate confusion matrix for the CNN+LSTM model"""
+        print("\nGenerating confusion matrix...")
+        
+        model.eval()
+        all_predictions = []
+        all_labels = []
+        
+        with torch.no_grad():
+            for videos, labels_batch in tqdm(data_loader, desc="Evaluating model"):
+                videos = videos.to(device)
+                labels_batch = labels_batch.to(device)
+                
+                outputs = model(videos)
+                _, predicted = torch.max(outputs, 1)
+                
+                all_predictions.extend(predicted.cpu().numpy())
+                all_labels.extend(labels_batch.cpu().numpy())
+        
+        # Generate confusion matrix
+        cm = confusion_matrix(all_labels, all_predictions)
+        
+        # Create figure
+        plt.figure(figsize=(max(10, len(class_names)), max(8, len(class_names))))
+        
+        # Create heatmap
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
+                   xticklabels=class_names, yticklabels=class_names,
+                   square=True, linewidths=0.5, cbar_kws={"shrink": .8})
+        
+        plt.title('CNN+LSTM Confusion Matrix', fontsize=16, fontweight='bold', pad=20)
+        plt.xlabel('Predicted Label', fontsize=12, fontweight='bold')
+        plt.ylabel('True Label', fontsize=12, fontweight='bold')
+        plt.xticks(rotation=45, ha='right')
+        plt.yticks(rotation=0)
+        
+        # Calculate accuracy per class
+        accuracy_per_class = cm.diagonal() / cm.sum(axis=1)
+        overall_accuracy = np.trace(cm) / np.sum(cm)
+        
+        # Add accuracy info
+        info_text = f'Overall Accuracy: {overall_accuracy:.3f}\n'
+        for i, class_name in enumerate(class_names):
+            info_text += f'{class_name}: {accuracy_per_class[i]:.3f}\n'
+        
+        plt.figtext(0.02, 0.02, info_text, fontsize=10, 
+                   bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray"))
+        
+        plt.tight_layout()
+        
+        # Save confusion matrix
+        cm_filename = self.output_dir / "confusion_matrices" / "cnn_lstm_confusion_matrix.png"
+        plt.savefig(cm_filename, dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        # Generate classification report
+        report = classification_report(all_labels, all_predictions, 
+                                     target_names=class_names, output_dict=True)
+        
+        print(f"  ✓ Confusion matrix saved: {cm_filename}")
+        print(f"  ✓ Overall accuracy: {overall_accuracy:.1%}")
+        
+        return str(cm_filename), cm, report
+    
+    def save_comprehensive_results(self, training_history, class_names, cm, report, plot_file, cm_file):
+        """Save comprehensive training results with all metrics"""
+        print("\nSaving comprehensive results...")
+        
+        # Enhanced results dictionary
+        comprehensive_results = {
+            # Training history
+            'training_history': training_history,
+            
+            # Model information
+            'model_info': {
+                'architecture': 'CNN+LSTM',
+                'backbone': 'EfficientNet-B0',
+                'lstm_layers': 2,
+                'lstm_hidden_sizes': [256, 128],
+                'bidirectional': True,
+                'dropout_rates': [0.3, 0.5, 0.3],
+                'sequence_length': self.sequence_length,
+                'input_size': self.input_size,
+                'num_classes': self.num_classes
+            },
+            
+            # Training configuration
+            'training_config': {
+                'epochs': self.epochs,
+                'batch_size': self.batch_size,
+                'learning_rate': self.learning_rate,
+                'augmentation_factor': self.augmentation_factor,
+                'optimizer': 'Adam',
+                'scheduler': 'ReduceLROnPlateau',
+                'early_stopping_patience': 15
+            },
+            
+            # Dataset information
+            'dataset_info': {
+                'num_classes': self.num_classes,
+                'class_names': class_names,
+                'total_videos': training_history.get('dataset_size', 0),
+                'train_test_split': '80/20',
+                'augmentation_applied': self.augmentation_factor > 0
+            },
+            
+            # Final results
+            'final_results': {
+                'best_accuracy': max(training_history['val_acc']),
+                'final_train_loss': training_history['train_loss'][-1],
+                'final_val_loss': training_history['val_loss'][-1],
+                'final_train_acc': training_history['train_acc'][-1],
+                'final_val_acc': training_history['val_acc'][-1],
+                'epochs_trained': len(training_history['train_loss'])
+            },
+            
+            # Confusion matrix data
+            'confusion_matrix': cm.tolist(),
+            
+            # Classification report
+            'classification_report': report,
+            
+            # Training environment
+            'environment': {
+                'device': str(device),
+                'torch_version': torch.__version__,
+                'cuda_available': torch.cuda.is_available(),
+                'gpu_name': torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+                'training_date': datetime.now().isoformat()
+            },
+            
+            # Output files
+            'output_files': {
+                'model_file': str(self.output_dir / "models" / "best_sasl_cnn_lstm_model.pth"),
+                'plot_file': plot_file,
+                'confusion_matrix_file': cm_file,
+                'class_names_file': str(self.output_dir / "results" / "class_names.json"),
+                'results_file': str(self.output_dir / "results" / "cnn_training_results.json")
+            }
+        }
+        
+        # Save comprehensive results
+        results_file = self.output_dir / "results" / "cnn_training_results.json"
+        with open(results_file, 'w') as f:
+            json.dump(comprehensive_results, f, indent=2, default=str)
+        
+        # Save class names separately (for compatibility)
+        classes_file = self.output_dir / "results" / "class_names.json"
+        with open(classes_file, 'w') as f:
+            json.dump(class_names, f, indent=2)
+        
+        # Create a detailed summary report
+        summary_file = self.output_dir / "results" / "training_summary.txt"
+        with open(summary_file, 'w') as f:
+            f.write("SASL CNN-Only Training Summary\n")
+            f.write("=" * 50 + "\n\n")
+            
+            f.write(f"Training Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"Device Used: {device}\n\n")
+            
+            f.write("Dataset Information:\n")
+            f.write(f"  Classes: {self.num_classes}\n")
+            f.write(f"  Class Names: {', '.join(class_names)}\n")
+            f.write(f"  Total Videos: {comprehensive_results['dataset_info']['total_videos']}\n")
+            f.write(f"  Augmentation Factor: {self.augmentation_factor}x\n\n")
+            
+            f.write("Training Configuration:\n")
+            f.write(f"  Epochs: {self.epochs}\n")
+            f.write(f"  Batch Size: {self.batch_size}\n")
+            f.write(f"  Learning Rate: {self.learning_rate}\n")
+            f.write(f"  Sequence Length: {self.sequence_length}\n")
+            f.write(f"  Input Size: {self.input_size}\n\n")
+            
+            f.write("Final Results:\n")
+            f.write(f"  Best Validation Accuracy: {comprehensive_results['final_results']['best_accuracy']:.2f}%\n")
+            f.write(f"  Final Training Accuracy: {comprehensive_results['final_results']['final_train_acc']:.2f}%\n")
+            f.write(f"  Final Validation Accuracy: {comprehensive_results['final_results']['final_val_acc']:.2f}%\n")
+            f.write(f"  Epochs Trained: {comprehensive_results['final_results']['epochs_trained']}\n\n")
+            
+            f.write("Per-Class Performance:\n")
+            for class_name in class_names:
+                if class_name in report:
+                    precision = report[class_name]['precision']
+                    recall = report[class_name]['recall']
+                    f1_score = report[class_name]['f1-score']
+                    f.write(f"  {class_name}: Precision={precision:.3f}, Recall={recall:.3f}, F1={f1_score:.3f}\n")
+            
+            f.write(f"\nOutput Files:\n")
+            f.write(f"  Model: {comprehensive_results['output_files']['model_file']}\n")
+            f.write(f"  Training Plot: {comprehensive_results['output_files']['plot_file']}\n")
+            f.write(f"  Confusion Matrix: {comprehensive_results['output_files']['confusion_matrix_file']}\n")
+            f.write(f"  Results: {comprehensive_results['output_files']['results_file']}\n")
+        
+        print(f"  ✓ Comprehensive results saved: {results_file}")
+        print(f"  ✓ Class names saved: {classes_file}")
+        print(f"  ✓ Training summary saved: {summary_file}")
+        
+        return str(results_file), str(summary_file)
+    
     def load_video_dataset(self):
         """Load all videos with parallel processing"""
         print("\\nLoading video dataset with parallel processing...")
@@ -609,35 +845,42 @@ class CNNOnlyVideoSASLTrainer:
                 print(f"\\nEarly stopping triggered after {patience_counter} epochs without improvement")
                 break
         
-        # Save final results
-        results = {
-            'training_history': training_history,
-            'final_accuracy': best_acc,
-            'num_classes': self.num_classes,
-            'class_names': class_names,
-            'dataset_size': len(video_sequences),
-            'epochs_trained': epoch + 1,
-            'batch_size': self.batch_size,
-            'augmentation_factor': self.augmentation_factor,
-            'training_date': datetime.now().isoformat()
-        }
+        # Add dataset size to training history for results
+        training_history['dataset_size'] = len(video_sequences)
         
-        # Save class names
-        with open(self.output_dir / "results" / "class_names.json", 'w') as f:
-            json.dump(class_names, f, indent=2)
+        print(f"\\n" + "="*60)
+        print("GENERATING COMPREHENSIVE OUTPUTS")
+        print("="*60)
+        
+        # Generate training history plots
+        plot_file = self.plot_training_history(training_history)
+        
+        # Load best model for confusion matrix generation
+        best_model = CNNLSTMModel(self.num_classes, self.sequence_length, self.input_size).to(device)
+        best_model.load_state_dict(torch.load(self.output_dir / "models" / "best_sasl_cnn_lstm_model.pth"))
+        
+        # Generate confusion matrix
+        cm_file, cm, report = self.generate_confusion_matrix(best_model, test_loader, class_names)
         
         # Save comprehensive results
-        with open(self.output_dir / "results" / "cnn_training_results.json", 'w') as f:
-            json.dump(results, f, indent=2)
+        results_file, summary_file = self.save_comprehensive_results(
+            training_history, class_names, cm, report, plot_file, cm_file
+        )
         
         print(f"\\n" + "="*80)
         print("CNN-ONLY TRAINING COMPLETE!")
         print("="*80)
         print(f"Final Results:")
         print(f"  CNN+LSTM Accuracy: {best_acc:.1f}%")
+        print(f"  Epochs Trained: {epoch + 1}/{self.epochs}")
+        print(f"  Dataset Size: {len(video_sequences)} videos")
+        print(f"  Classes: {len(class_names)}")
         print(f"\\nOutput Directory: {self.output_dir}")
-        print(f"  Model: {self.output_dir / 'models' / 'best_sasl_cnn_lstm_model.pth'}")
-        print(f"  Results: {self.output_dir / 'results' / 'class_names.json'}")
+        print(f"  📊 Model: best_sasl_cnn_lstm_model.pth")
+        print(f"  📈 Training Plot: cnn_lstm_training_history.png")
+        print(f"  🎯 Confusion Matrix: cnn_lstm_confusion_matrix.png")
+        print(f"  📋 Results: cnn_training_results.json")
+        print(f"  📝 Summary: training_summary.txt")
         
         return model
 
