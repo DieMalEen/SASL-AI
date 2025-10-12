@@ -27,9 +27,9 @@ import timm
 # Import the model from training file to ensure compatibility
 try:
     from video_cnn_only_training import CNNLSTMModel
-    print("✓ Successfully imported CNNLSTMModel from training module")
+    print("Successfully imported CNNLSTMModel from training module")
 except ImportError as e:
-    print(f"⚠️  Could not import CNNLSTMModel from training module: {e}")
+    print(f"Warning: Could not import CNNLSTMModel from training module: {e}")
     print("   Using local model definition (may cause compatibility issues)")
     CNNLSTMModel = None
 
@@ -90,7 +90,7 @@ class SASLCNNOnlyCameraRecognition:
             self.model.to(device)
             self.model.eval()
             
-            print("✓ CNN+LSTM model loaded successfully")
+            print("CNN+LSTM model loaded successfully")
             
         except Exception as e:
             print(f"❌ Error loading model: {e}")

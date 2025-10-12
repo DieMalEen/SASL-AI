@@ -318,7 +318,7 @@ def train_cnn_only_models():
         model = trainer.train_model()
         
         if model is not None:
-            print(f"\n✓ CNN-only training completed successfully!")
+            print(f"\nCNN-only training completed successfully!")
             print(f"  Configuration used: {config['epochs']} epochs, batch {config['batch_size']}, aug {config['augmentation_factor']}x")
             print(f"  Models saved in: outputs/training_[timestamp]/models/")
             print(f"  Results saved in: outputs/training_[timestamp]/results/")
@@ -396,7 +396,7 @@ def train_dual_models():
         cnn_lstm_model, pose_lstm_model = trainer.train_models()
         
         if cnn_lstm_model is not None:
-            print(f"\n✓ Dual model training completed!")
+            print(f"\nDual model training completed!")
             print(f"  Note: Consider using CNN-only training for better performance")
         else:
             print(f"\n✗ Training failed. Check your dataset.")
@@ -497,7 +497,7 @@ def live_cnn_only_recognition():
         with open(model_files[1], 'r') as f:
             classes = json.load(f)
         
-        print(f"\n✓ FOUND: Trained CNN-only model for {len(classes)} SASL classes:")
+        print(f"\nFOUND: Trained CNN-only model for {len(classes)} SASL classes:")
         for i, class_name in enumerate(classes, 1):
             print(f"   {i:2d}. {class_name}")
         
@@ -696,9 +696,9 @@ def manage_models_and_outputs():
             pose_model = models_dir / "best_sasl_pose_lstm_model.pth"
             
             if cnn_model.exists():
-                print(f"       ✓ CNN+LSTM model")
+                print(f"       CNN+LSTM model")
             if pose_model.exists():
-                print(f"       ✓ Pose LSTM model")
+                print(f"       Pose LSTM model")
         
         if results_dir.exists():
             result_files = list(results_dir.glob("*.json")) + list(results_dir.glob("*.png"))
@@ -796,7 +796,7 @@ def show_system_info():
                 version = imported.__version__
             else:
                 version = "Unknown"
-            print(f"  ✓ {description}: v{version}")
+            print(f"  {description}: v{version}")
         except ImportError:
             print(f"  ✗ {description}: Not installed")
     

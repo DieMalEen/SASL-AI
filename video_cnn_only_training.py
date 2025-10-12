@@ -333,20 +333,20 @@ class CNNOnlyVideoSASLTrainer:
         if learning_rate <= 0:
             raise ValueError("Learning rate must be greater than 0")
         
-        print(f"🚀 CNN-Only VideoSASLTrainer initialized:")
-        print(f"  📁 Video dataset: {video_dataset_path}")
-        print(f"  🎬 Sequence length: {sequence_length} frames")
-        print(f"  📏 Input size: {input_size}")
-        print(f"  🔄 Training epochs: {epochs}")
-        print(f"  📦 Batch size: {batch_size}")
-        print(f"  🔀 Augmentation factor: {augmentation_factor}x")
-        print(f"  📈 Learning rate: {learning_rate}")
-        print(f"  💻 Device: {device}")
-        print(f"  👥 Workers: {self.num_workers}")
+        print(f"CNN-Only VideoSASLTrainer initialized:")
+        print(f"  Video dataset: {video_dataset_path}")
+        print(f"  Sequence length: {sequence_length} frames")
+        print(f"  Input size: {input_size}")
+        print(f"  Training epochs: {epochs}")
+        print(f"  Batch size: {batch_size}")
+        print(f"  Augmentation factor: {augmentation_factor}x")
+        print(f"  Learning rate: {learning_rate}")
+        print(f"  Device: {device}")
+        print(f"  Workers: {self.num_workers}")
         
         # Estimate training time
         estimated_time_mins = epochs * (1 + augmentation_factor) * 0.3
-        print(f"  ⏱️  Estimated training time: {estimated_time_mins:.0f}-{estimated_time_mins*2:.0f} minutes")
+        print(f"  Estimated training time: {estimated_time_mins:.0f}-{estimated_time_mins*2:.0f} minutes")
         
         # Create dataset directory
         self.video_dataset_path.mkdir(exist_ok=True)
@@ -385,7 +385,7 @@ class CNNOnlyVideoSASLTrainer:
         plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
         plt.close()
         
-        print(f"  ✓ Training history plot saved: {plot_filename}")
+        print(f"  Training history plot saved: {plot_filename}")
         return str(plot_filename)
     
     def generate_confusion_matrix(self, model, data_loader, class_names):
@@ -447,8 +447,8 @@ class CNNOnlyVideoSASLTrainer:
         report = classification_report(all_labels, all_predictions, 
                                      target_names=class_names, output_dict=True)
         
-        print(f"  ✓ Confusion matrix saved: {cm_filename}")
-        print(f"  ✓ Overall accuracy: {overall_accuracy:.1%}")
+        print(f"  Confusion matrix saved: {cm_filename}")
+        print(f"  Overall accuracy: {overall_accuracy:.1%}")
         
         return str(cm_filename), cm, report
     
@@ -581,9 +581,9 @@ class CNNOnlyVideoSASLTrainer:
             f.write(f"  Confusion Matrix: {comprehensive_results['output_files']['confusion_matrix_file']}\n")
             f.write(f"  Results: {comprehensive_results['output_files']['results_file']}\n")
         
-        print(f"  ✓ Comprehensive results saved: {results_file}")
-        print(f"  ✓ Class names saved: {classes_file}")
-        print(f"  ✓ Training summary saved: {summary_file}")
+        print(f"  Comprehensive results saved: {results_file}")
+        print(f"  Class names saved: {classes_file}")
+        print(f"  Training summary saved: {summary_file}")
         
         return str(results_file), str(summary_file)
     
@@ -876,11 +876,11 @@ class CNNOnlyVideoSASLTrainer:
         print(f"  Dataset Size: {len(video_sequences)} videos")
         print(f"  Classes: {len(class_names)}")
         print(f"\\nOutput Directory: {self.output_dir}")
-        print(f"  📊 Model: best_sasl_cnn_lstm_model.pth")
-        print(f"  📈 Training Plot: cnn_lstm_training_history.png")
-        print(f"  🎯 Confusion Matrix: cnn_lstm_confusion_matrix.png")
-        print(f"  📋 Results: cnn_training_results.json")
-        print(f"  📝 Summary: training_summary.txt")
+        print(f"  Model: best_sasl_cnn_lstm_model.pth")
+        print(f"  Training Plot: cnn_lstm_training_history.png")
+        print(f"  Confusion Matrix: cnn_lstm_confusion_matrix.png")
+        print(f"  Results: cnn_training_results.json")
+        print(f"  Summary: training_summary.txt")
         
         return model
 

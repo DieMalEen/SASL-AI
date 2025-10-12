@@ -437,7 +437,7 @@ class VideoSASLTrainer:
             for ext in ['*.mp4', '*.avi', '*.mov', '*.mkv', '*.wmv']:
                 video_files.extend(list(class_dir.glob(ext)))
             
-            print(f"  📁 '{class_name}': {len(video_files)} videos")
+            print(f"  '{class_name}': {len(video_files)} videos")
             
             for video_file in video_files:
                 all_video_tasks.append((
