@@ -112,9 +112,10 @@ def show_main_menu():
     print(f"   3.  Train Dual Models")
     print(f"   4.  CNN-Only Live Recognition")
     print(f"   5.  Dual Model Live Recognition")
-    print(f"   6.  Manage Models & Outputs")
-    print(f"   7.  System Information")
-    print(f"   8.  Exit")
+    print(f"   6.  Batch Video Prediction")
+    print(f"   7.  Manage Models & Outputs")
+    print(f"   8.  System Information")
+    print(f"   9.  Exit")
     print(f"\n" + "=" * 70)
 
 def configure_cnn_training_parameters():
@@ -646,6 +647,73 @@ def live_dual_model_recognition():
         traceback.print_exc()
         input("Press Enter to continue...")
 
+def batch_video_prediction():
+    """Launch batch video prediction using standalone script"""
+    clear_screen()
+    print("Batch Video Prediction")
+    print("=" * 50)
+    print("Automatic batch prediction for videos in test_videos folder.")
+    print("This will predict hand signs for multiple videos using your latest trained model.")
+    
+    try:
+        import subprocess
+        import sys
+        
+        # Check if batch_video_prediction.py exists
+        script_path = Path("batch_video_prediction.py")
+        if not script_path.exists():
+            print("ERROR: batch_video_prediction.py script not found!")
+            print("Make sure the script is in the same directory as main.py")
+            input("Press Enter to continue...")
+            return
+        
+        # Check if test_videos folder exists and has content
+        test_videos_dir = Path("test_videos")
+        if not test_videos_dir.exists():
+            test_videos_dir.mkdir()
+            print(f"Created test_videos folder: {test_videos_dir}")
+        
+        video_extensions = ['.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv']
+        video_files = []
+        for ext in video_extensions:
+            video_files.extend(test_videos_dir.glob(f"*{ext}"))
+            video_files.extend(test_videos_dir.glob(f"*{ext.upper()}"))
+        
+        if not video_files:
+            print(f"\nNo videos found in {test_videos_dir}")
+            print(f"Please add some video files to the test_videos folder first.")
+            print(f"Supported formats: {', '.join(video_extensions)}")
+            input("Press Enter to continue...")
+            return
+        
+        print(f"\nFound {len(video_files)} video(s) in test_videos folder:")
+        for video_file in video_files[:5]:  # Show first 5 files
+            print(f"  - {video_file.name}")
+        if len(video_files) > 5:
+            print(f"  ... and {len(video_files) - 5} more")
+        
+        print(f"\nLaunching batch prediction script...")
+        print("The script will automatically detect your latest trained model.")
+        print()
+        
+        # Launch the standalone script
+        result = subprocess.run([sys.executable, "batch_video_prediction.py"], 
+                              cwd=Path.cwd())
+        
+        if result.returncode == 0:
+            print("\nBatch prediction completed successfully!")
+            print("Check the generated results file for detailed predictions.")
+        else:
+            print(f"\nBatch prediction script exited with code: {result.returncode}")
+        
+    except KeyboardInterrupt:
+        print("\nBatch prediction interrupted by user.")
+    except Exception as e:
+        print(f"ERROR: Could not launch batch prediction script: {e}")
+        print("You can run it manually with: python batch_video_prediction.py")
+    
+    input("\nPress Enter to return to main menu...")
+
 def manage_models_and_outputs():
     """Manage models and output files"""
     clear_screen()
@@ -835,7 +903,7 @@ def main():
     while True:
         show_main_menu()
         
-        choice = input("Enter your choice (1-8): ").strip()
+        choice = input("Enter your choice (1-9): ").strip()
         
         if choice == '1':
             collect_video_data()
@@ -848,10 +916,12 @@ def main():
         elif choice == '5':
             live_dual_model_recognition()
         elif choice == '6':
-            manage_models_and_outputs()
+            batch_video_prediction()
         elif choice == '7':
-            show_system_info()
+            manage_models_and_outputs()
         elif choice == '8':
+            show_system_info()
+        elif choice == '9':
             clear_screen()
             print("Thank you for using SASL-AI Recognition System!")
             print("Goodbye!")

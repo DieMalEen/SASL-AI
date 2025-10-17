@@ -79,19 +79,33 @@ def process_single_video(args):
                 with open(cache_path, 'rb') as f:
                     cached_data = pickle.load(f)
                     if (cached_data.get('sequence_length') == sequence_length and
-                        cached_data.get('input_size') == input_size):
-                        return (video_path, cached_data['video_seq'], True)
+                        cached_data.get('input_size') == input_size and
+                        'pose_seq' in cached_data):
+                        return (video_path, cached_data['video_seq'], cached_data['pose_seq'], True)
             except:
                 pass  # Cache corrupted, process normally
         
-        # No MediaPipe needed for CNN-only training
+        # Initialize MediaPipe for pose/hand detection
+        mp_holistic = mp.solutions.holistic
+        holistic = mp_holistic.Holistic(
+            static_image_mode=False,
+            model_complexity=1,
+            smooth_landmarks=True,
+            enable_segmentation=False,
+            smooth_segmentation=True,
+            refine_face_landmarks=False,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5
+        )
         
         # Process video
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
-            return (video_path, None, False)
+            holistic.close()
+            return (video_path, None, None, False)
         
         frames = []
+        pose_sequence = []
         
         while True:
             ret, frame = cap.read()
@@ -101,9 +115,40 @@ def process_single_video(args):
             # Resize frame
             frame = cv2.resize(frame, input_size)
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            
+            # Extract pose landmarks using MediaPipe
+            results = holistic.process(rgb_frame)
+            
+            # Extract landmarks (pose + hands + face key points)
+            landmarks = []
+            
+            # Pose landmarks (33 points * 3 coords = 99 features)
+            if results.pose_landmarks:
+                for landmark in results.pose_landmarks.landmark:
+                    landmarks.extend([landmark.x, landmark.y, landmark.z])
+            else:
+                landmarks.extend([0.0] * 99)  # Zero padding if no pose detected
+            
+            # Left hand landmarks (21 points * 3 coords = 63 features)
+            if results.left_hand_landmarks:
+                for landmark in results.left_hand_landmarks.landmark:
+                    landmarks.extend([landmark.x, landmark.y, landmark.z])
+            else:
+                landmarks.extend([0.0] * 63)  # Zero padding if no left hand detected
+            
+            # Right hand landmarks (21 points * 3 coords = 63 features)
+            if results.right_hand_landmarks:
+                for landmark in results.right_hand_landmarks.landmark:
+                    landmarks.extend([landmark.x, landmark.y, landmark.z])
+            else:
+                landmarks.extend([0.0] * 63)  # Zero padding if no right hand detected
+            
+            # Total: 99 + 63 + 63 = 225 features per frame
+            pose_sequence.append(landmarks)
             frames.append(rgb_frame)
         
         cap.release()
+        holistic.close()
         
         # Adjust sequence length
         if len(frames) == 0:
@@ -122,11 +167,13 @@ def process_single_video(args):
                 pose_sequence.append(pose_sequence[-1])
         
         video_seq = np.array(frames) / 255.0
+        pose_seq = np.array(pose_sequence)
         
         # Cache the results
         try:
             cached_data = {
                 'video_seq': video_seq,
+                'pose_seq': pose_seq,
                 'sequence_length': sequence_length,
                 'input_size': input_size
             }
@@ -135,11 +182,11 @@ def process_single_video(args):
         except:
             pass  # Ignore cache save errors
         
-        return (video_path, video_seq, False)
+        return (video_path, video_seq, pose_seq, False)
         
     except Exception as e:
         print(f"Error processing {video_path}: {e}")
-        return (video_path, None, False)
+        return (video_path, None, None, False)
 
 class SASLVideoDataset(Dataset):
     """PyTorch Dataset for SASL video sequences"""

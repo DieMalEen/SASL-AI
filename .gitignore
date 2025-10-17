@@ -8,6 +8,10 @@ video_dataset/*
 outputs/*
 !outputs/.gitkeep
 
+# Test videos
+test_videos/*
+!test_videos/.gitkeep
+
 # Python
 __pycache__/
 *.py[cod]

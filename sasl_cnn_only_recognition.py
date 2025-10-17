@@ -7,10 +7,10 @@ Streamlined real-time SASL recognition using only CNN+LSTM model.
 No pose dependency - more robust, faster, and better performance.
 
 Features:
-- Real-time video processing with CNN+LSTM only
-- No MediaPipe pose dependency
-- Simpler, more robust system
-- Better performance (90-100% accuracy)
+- Real-time video processing with CNN+LSTM or Combined CNN+Hand Landmarks
+- Optional MediaPipe hand detection for enhanced accuracy
+- Automatic model detection and fallback to CNN-only
+- Better performance with hand landmarks when available
 - Faster processing
 """
 
@@ -24,14 +24,24 @@ import time
 from collections import deque
 import timm
 
-# Import the model from training file to ensure compatibility
+# Import the models from training file to ensure compatibility
 try:
-    from video_cnn_only_training import CNNLSTMModel
-    print("Successfully imported CNNLSTMModel from training module")
+    from video_cnn_only_training import CNNLSTMModel, CombinedCNNHandModel, MEDIAPIPE_AVAILABLE
+    print("Successfully imported models from training module")
+    
+    # MediaPipe for hand detection (if available)
+    if MEDIAPIPE_AVAILABLE:
+        import mediapipe as mp
+        print("MediaPipe available for hand landmark extraction")
+    else:
+        print("MediaPipe not available - will use CNN-only fallback")
+        
 except ImportError as e:
-    print(f"Warning: Could not import CNNLSTMModel from training module: {e}")
+    print(f"Warning: Could not import models from training module: {e}")
     print("   Using local model definition (may cause compatibility issues)")
     CNNLSTMModel = None
+    CombinedCNNHandModel = None
+    MEDIAPIPE_AVAILABLE = False
 
 # Set device
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -41,44 +51,73 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 class SASLCNNOnlyCameraRecognition:
     """
-    Real-time SASL recognition using CNN+LSTM model only
+    Real-time SASL recognition using CNN+Hand Landmark fusion model
     """
     
     def __init__(self, model_path, classes_path, 
-                 sequence_length=30, input_size=(224, 224), confidence_threshold=0.3):
+                 sequence_length=30, input_size=(224, 224), confidence_threshold=0.3, 
+                 use_hand_landmarks=True):
         """
-        Initialize the CNN-only camera recognition system
+        Initialize the SASL camera recognition system
         
         Args:
-            model_path: Path to CNN+LSTM PyTorch model (.pth)
+            model_path: Path to PyTorch model (.pth)
             classes_path: Path to class names JSON file
             sequence_length: Number of frames for temporal modeling
             input_size: Input image size for CNN
             confidence_threshold: Minimum confidence for predictions
+            use_hand_landmarks: Whether to use hand landmarks (if available)
         """
         self.sequence_length = sequence_length
         self.input_size = input_size
         self.confidence_threshold = confidence_threshold
+        self.use_hand_landmarks = use_hand_landmarks and MEDIAPIPE_AVAILABLE
         
         # Load class names
         with open(classes_path, 'r') as f:
             self.class_names = json.load(f)
         self.num_classes = len(self.class_names)
         
-        print(f"Initializing CNN-Only SASL Camera Recognition")
+        print(f"Initializing SASL Camera Recognition")
         print(f"Device: {device}")
         print(f"Classes: {self.num_classes}")
         print(f"Sequence length: {sequence_length}")
         print(f"Input size: {input_size}")
+        print(f"Hand landmarks: {'Enabled' if self.use_hand_landmarks else 'Disabled'}")
         
-        # Load CNN+LSTM Model with error handling
-        print("Loading CNN+LSTM model...")
+        # Initialize MediaPipe if using hand landmarks
+        if self.use_hand_landmarks:
+            print("Initializing MediaPipe hand detection...")
+            mp_hands = mp.solutions.hands
+            self.hands = mp_hands.Hands(
+                static_image_mode=False,
+                max_num_hands=2,
+                min_detection_confidence=0.5,
+                min_tracking_confidence=0.5
+            )
+        else:
+            self.hands = None
         
-        if CNNLSTMModel is None:
-            raise ImportError("Could not import CNNLSTMModel. Please ensure video_cnn_only_training.py is available.")
+        # Load Model with error handling
+        print("Loading model...")
+        
+        # Determine which model to use
+        use_combined_model = self.use_hand_landmarks and CombinedCNNHandModel is not None
+        
+        if use_combined_model:
+            print("Using Combined CNN + Hand Landmark model")
+            if CombinedCNNHandModel is None:
+                raise ImportError("Could not import CombinedCNNHandModel. Please ensure video_cnn_only_training.py is available.")
+            model_class = CombinedCNNHandModel
+        else:
+            print("Using CNN-only model (fallback)")
+            if CNNLSTMModel is None:
+                raise ImportError("Could not import CNNLSTMModel. Please ensure video_cnn_only_training.py is available.")
+            model_class = CNNLSTMModel
         
         try:
-            self.model = CNNLSTMModel(self.num_classes, sequence_length, input_size)
+            self.model = model_class(self.num_classes, sequence_length, input_size)
+            self.is_combined_model = use_combined_model
             
             # Load model state with proper error handling
             if not Path(model_path).exists():
@@ -90,34 +129,82 @@ class SASLCNNOnlyCameraRecognition:
             self.model.to(device)
             self.model.eval()
             
-            print("CNN+LSTM model loaded successfully")
+            model_type = "Combined CNN+Hand" if use_combined_model else "CNN-only"
+            print(f"{model_type} model loaded successfully")
             
         except Exception as e:
             print(f"❌ Error loading model: {e}")
             raise
         
-        print("CNN+LSTM model loaded successfully")
-        
         # Frame buffer for temporal modeling
         self.frame_buffer = deque(maxlen=sequence_length)
+        
+        # Hand landmarks buffer (if using hand landmarks)
+        if self.use_hand_landmarks:
+            self.hand_landmarks_buffer = deque(maxlen=sequence_length)
         
         # Prediction smoothing
         self.prediction_buffer = deque(maxlen=5)  # Smooth over 5 predictions
         
-        print("CNN-only camera recognition system ready!")
+        recognition_type = "CNN+Hand Landmark" if self.use_hand_landmarks else "CNN-only"
+        print(f"{recognition_type} camera recognition system ready!")
+    
+    def extract_hand_landmarks(self, rgb_frame):
+        """Extract hand landmarks from RGB frame"""
+        if not self.use_hand_landmarks or self.hands is None:
+            return [0.0] * 126  # Return zeros if not using hand detection
+        
+        try:
+            results = self.hands.process(rgb_frame)
+            
+            frame_landmarks = []
+            
+            if results.multi_hand_landmarks:
+                for hand_landmarks in results.multi_hand_landmarks:
+                    hand_coords = []
+                    for landmark in hand_landmarks.landmark:
+                        # Normalize coordinates to [0,1] relative to frame size
+                        hand_coords.extend([landmark.x, landmark.y, landmark.z])
+                    frame_landmarks.extend(hand_coords)
+            
+            # Pad to consistent size (2 hands * 21 landmarks * 3 coords = 126 features)
+            while len(frame_landmarks) < 126:
+                frame_landmarks.append(0.0)
+            
+            # Truncate if somehow more than 126 features
+            frame_landmarks = frame_landmarks[:126]
+            
+            return frame_landmarks
+            
+        except Exception as e:
+            print(f"Error extracting hand landmarks: {e}")
+            return [0.0] * 126
     
     def predict_sign(self):
-        """Make prediction using CNN+LSTM model"""
+        """Make prediction using the loaded model"""
         if len(self.frame_buffer) < self.sequence_length:
             return None, None, []
         
-        # Prepare video sequence for CNN+LSTM
+        # Check if we have enough hand landmarks (if using them)
+        if self.use_hand_landmarks and len(self.hand_landmarks_buffer) < self.sequence_length:
+            return None, None, []
+        
+        # Prepare video sequence
         video_sequence = np.array(list(self.frame_buffer)) / 255.0
         video_tensor = torch.FloatTensor(video_sequence).unsqueeze(0).permute(0, 1, 4, 2, 3).to(device)
         
         with torch.no_grad():
-            # CNN+LSTM prediction
-            outputs = self.model(video_tensor)
+            if self.is_combined_model and self.use_hand_landmarks:
+                # Combined model prediction with hand landmarks
+                hand_sequence = np.array(list(self.hand_landmarks_buffer))
+                hand_tensor = torch.FloatTensor(hand_sequence).unsqueeze(0).to(device)
+                
+                final_outputs, cnn_outputs, hand_outputs = self.model(video_tensor, hand_tensor)
+                outputs = final_outputs  # Use the combined prediction
+            else:
+                # CNN-only prediction
+                outputs = self.model(video_tensor)
+            
             probs = torch.softmax(outputs, dim=1)
             
             # Get top-3 predictions
@@ -205,8 +292,9 @@ class SASLCNNOnlyCameraRecognition:
                 cv2.putText(frame, text, (20, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
         
         # Instructions
+        recognition_type = "CNN+Hand Landmark" if self.use_hand_landmarks else "CNN-Only"
         instructions = [
-            "CNN-Only Recognition:",
+            f"{recognition_type} Recognition:",
             "- Hold sign clearly for 1-2 seconds",
             "- Ensure good lighting", 
             "- Press 'q' to quit, 'r' to reset"
@@ -222,7 +310,8 @@ class SASLCNNOnlyCameraRecognition:
     
     def run_live_recognition(self):
         """Run live camera recognition"""
-        print("Starting live CNN-only SASL recognition...")
+        recognition_type = "CNN+Hand Landmark" if self.use_hand_landmarks else "CNN-only"
+        print(f"Starting live {recognition_type} SASL recognition...")
         print("Controls:")
         print("  - Hold signs clearly for 1-2 seconds")
         print("  - Press 'q' to quit")
@@ -259,6 +348,11 @@ class SASLCNNOnlyCameraRecognition:
                 # Update frame buffer
                 self.frame_buffer.append(model_frame)
                 
+                # Extract and update hand landmarks if using them
+                if self.use_hand_landmarks:
+                    hand_landmarks = self.extract_hand_landmarks(rgb_frame)
+                    self.hand_landmarks_buffer.append(hand_landmarks)
+                
                 # Make prediction
                 best_prediction, best_confidence, top3_predictions = self.predict_sign()
                 
@@ -281,7 +375,8 @@ class SASLCNNOnlyCameraRecognition:
                           (frame.shape[1] - 100, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
                 
                 # System info
-                cv2.putText(frame, "CNN-Only Mode", (frame.shape[1] - 150, 60), 
+                mode_text = "CNN+Hand Mode" if self.use_hand_landmarks else "CNN-Only Mode"
+                cv2.putText(frame, mode_text, (frame.shape[1] - 150, 60), 
                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
                 
                 # Display frame
@@ -294,6 +389,8 @@ class SASLCNNOnlyCameraRecognition:
                 elif key == ord('r'):
                     # Reset buffers
                     self.frame_buffer.clear()
+                    if self.use_hand_landmarks:
+                        self.hand_landmarks_buffer.clear()
                     self.prediction_buffer.clear()
                     print("Buffers reset")
         
@@ -303,22 +400,33 @@ class SASLCNNOnlyCameraRecognition:
         finally:
             cap.release()
             cv2.destroyAllWindows()
-            print("CNN-only camera recognition finished")
+            
+            # Clean up MediaPipe resources
+            if self.use_hand_landmarks and self.hands:
+                self.hands.close()
+            
+            recognition_type = "CNN+Hand Landmark" if self.use_hand_landmarks else "CNN-only"
+            print(f"{recognition_type} camera recognition finished")
 
 def main():
     """Main function for testing"""
-    print("SASL CNN-Only Camera Recognition System")
+    print("SASL Camera Recognition System")
     print("=" * 50)
-    print("Searching for trained CNN+LSTM model...")
+    print("Searching for trained models...")
     
-    # Check if we can import the model
-    if CNNLSTMModel is None:
-        print("❌ ERROR: Could not import CNNLSTMModel from training module")
+    # Check if we can import the models
+    if CNNLSTMModel is None and CombinedCNNHandModel is None:
+        print("❌ ERROR: Could not import models from training module")
         print("\nTo fix this issue:")
         print("1. Make sure video_cnn_only_training.py exists")
         print("2. Make sure you're running from the correct directory")
         print("3. Check that the training module is not corrupted")
         return
+    
+    # Determine which model to prioritize
+    use_combined_model = CombinedCNNHandModel is not None and MEDIAPIPE_AVAILABLE
+    model_type = "Combined CNN+Hand Landmark" if use_combined_model else "CNN-only"
+    print(f"Will attempt to use: {model_type} model")
     
     # Check for the latest training outputs
     outputs_dir = Path("outputs")
@@ -393,13 +501,14 @@ def main():
         return
     
     try:
-        print("\\nStarting CNN-Only SASL Camera Recognition System...")
+        print(f"\\nStarting {model_type} SASL Camera Recognition System...")
         print("Initializing camera and loading model...")
         
-        # Initialize and run recognition
+        # Initialize and run recognition with appropriate model type
         recognition = SASLCNNOnlyCameraRecognition(
             model_path=model_files[0],
-            classes_path=model_files[1]
+            classes_path=model_files[1],
+            use_hand_landmarks=use_combined_model
         )
         
         print("Model loaded successfully!")

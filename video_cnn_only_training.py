@@ -35,6 +35,16 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
 from torch.utils.data import Dataset, DataLoader
 
+# MediaPipe for hand detection
+try:
+    import mediapipe as mp
+    MEDIAPIPE_AVAILABLE = True
+    print("MediaPipe available for hand detection")
+except ImportError:
+    MEDIAPIPE_AVAILABLE = False
+    print("Warning: MediaPipe not available. Install with: pip install mediapipe")
+    print("Hand detection will be disabled.")
+
 # Set device and configure PyTorch
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Using device: {device}")
@@ -53,13 +63,13 @@ if torch.cuda.is_available():
 
 def process_single_video(args):
     """
-    Process a single video file for CNN-only training
+    Process a single video file for CNN + hand landmark extraction
     """
     video_path, sequence_length, input_size, cache_dir = args
     
     try:
         # Check cache first
-        cache_filename = f"{Path(video_path).stem}_{sequence_length}_{input_size[0]}x{input_size[1]}_cnn.pkl"
+        cache_filename = f"{Path(video_path).stem}_{sequence_length}_{input_size[0]}x{input_size[1]}_cnn_hands.pkl"
         cache_path = cache_dir / cache_filename
         
         if cache_path.exists():
@@ -68,14 +78,25 @@ def process_single_video(args):
                     cached_data = pickle.load(f)
                     if (cached_data.get('sequence_length') == sequence_length and
                         cached_data.get('input_size') == input_size):
-                        return (video_path, cached_data['video_seq'], True)
+                        return (video_path, cached_data['video_seq'], cached_data['hand_landmarks'], True)
             except:
                 pass  # Cache corrupted, process normally
+        
+        # Initialize MediaPipe Hand detection
+        hand_landmarks_seq = []
+        if MEDIAPIPE_AVAILABLE:
+            mp_hands = mp.solutions.hands
+            hands = mp_hands.Hands(
+                static_image_mode=False,
+                max_num_hands=2,  # Detect both hands
+                min_detection_confidence=0.5,
+                min_tracking_confidence=0.5
+            )
         
         # Process video
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
-            return (video_path, None, False)
+            return (video_path, None, None, False)
         
         frames = []
         
@@ -84,33 +105,68 @@ def process_single_video(args):
             if not ret:
                 break
             
-            # Resize frame
-            frame = cv2.resize(frame, input_size)
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            # Resize frame for CNN
+            frame_resized = cv2.resize(frame, input_size)
+            rgb_frame = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
             frames.append(rgb_frame)
+            
+            # Extract hand landmarks using MediaPipe
+            if MEDIAPIPE_AVAILABLE:
+                results = hands.process(rgb_frame)
+                
+                # Extract hand landmarks (21 landmarks per hand, 2 hands max = 42 landmarks)
+                frame_landmarks = []
+                
+                if results.multi_hand_landmarks:
+                    for hand_landmarks in results.multi_hand_landmarks:
+                        hand_coords = []
+                        for landmark in hand_landmarks.landmark:
+                            # Normalize coordinates to [0,1] relative to frame size
+                            hand_coords.extend([landmark.x, landmark.y, landmark.z])
+                        frame_landmarks.extend(hand_coords)
+                
+                # Pad to consistent size (2 hands * 21 landmarks * 3 coords = 126 features)
+                # If no hands detected or fewer than 2 hands, pad with zeros
+                while len(frame_landmarks) < 126:
+                    frame_landmarks.append(0.0)
+                
+                # Truncate if somehow more than 126 features
+                frame_landmarks = frame_landmarks[:126]
+                hand_landmarks_seq.append(frame_landmarks)
+            else:
+                # If MediaPipe not available, create dummy landmarks
+                hand_landmarks_seq.append([0.0] * 126)
         
         cap.release()
         
-        # Adjust sequence length
+        # Clean up MediaPipe
+        if MEDIAPIPE_AVAILABLE:
+            hands.close()
+        
+        # Adjust sequence length for both video and hand landmarks
         if len(frames) == 0:
-            return (video_path, None, False)
+            return (video_path, None, None, False)
         
         # Pad or trim to target length
         if len(frames) > sequence_length:
             # Take evenly spaced frames
             indices = np.linspace(0, len(frames) - 1, sequence_length).astype(int)
             frames = [frames[i] for i in indices]
+            hand_landmarks_seq = [hand_landmarks_seq[i] for i in indices]
         elif len(frames) < sequence_length:
-            # Pad with last frame
+            # Pad with last frame/landmarks
             while len(frames) < sequence_length:
                 frames.append(frames[-1])
+                hand_landmarks_seq.append(hand_landmarks_seq[-1])
         
         video_seq = np.array(frames) / 255.0
+        hand_landmarks_seq = np.array(hand_landmarks_seq)
         
         # Cache the results
         try:
             cached_data = {
                 'video_seq': video_seq,
+                'hand_landmarks': hand_landmarks_seq,
                 'sequence_length': sequence_length,
                 'input_size': input_size
             }
@@ -119,17 +175,18 @@ def process_single_video(args):
         except:
             pass  # Ignore cache save errors
         
-        return (video_path, video_seq, False)
+        return (video_path, video_seq, hand_landmarks_seq, False)
         
     except Exception as e:
         print(f"Error processing {video_path}: {e}")
-        return (video_path, None, False)
+        return (video_path, None, None, False)
 
 class SASLVideoDataset(Dataset):
-    """PyTorch Dataset for SASL video sequences (CNN-only)"""
+    """PyTorch Dataset for SASL video sequences with hand landmarks"""
     
-    def __init__(self, video_sequences, labels, transform=None, augment_factor=0):
+    def __init__(self, video_sequences, hand_landmarks, labels, transform=None, augment_factor=0):
         self.video_sequences = video_sequences
+        self.hand_landmarks = hand_landmarks
         self.labels = labels
         self.transform = transform
         self.augment_factor = augment_factor
@@ -144,19 +201,26 @@ class SASLVideoDataset(Dataset):
         
         original_count = len(self.video_sequences)
         augmented_videos = list(self.video_sequences)
+        augmented_hands = list(self.hand_landmarks)
         augmented_labels = list(self.labels)
         
         for i in tqdm(range(original_count), desc="Augmenting data"):
             video_seq = self.video_sequences[i]
+            hand_seq = self.hand_landmarks[i]
             label = self.labels[i]
             
             for _ in range(self.augment_factor):
                 # Augment video sequence
                 aug_video = self._augment_video_sequence(video_seq)
+                # For hand landmarks, apply minimal augmentation (small noise)
+                aug_hands = self._augment_hand_sequence(hand_seq)
+                
                 augmented_videos.append(aug_video)
+                augmented_hands.append(aug_hands)
                 augmented_labels.append(label)
         
         self.video_sequences = augmented_videos
+        self.hand_landmarks = augmented_hands
         self.labels = augmented_labels
         
         print(f"Augmentation complete: {original_count} -> {len(self.video_sequences)} videos")
@@ -211,11 +275,27 @@ class SASLVideoDataset(Dataset):
         
         return augmented_sequence
     
+    def _augment_hand_sequence(self, hand_sequence):
+        """Apply minimal augmentation to hand landmark sequence"""
+        augmented_hands = hand_sequence.copy()
+        
+        # Add small amount of noise to hand landmarks
+        if np.random.random() < 0.7:  # 70% chance to add noise
+            noise_std = np.random.uniform(0.001, 0.01)  # Very small noise
+            noise = np.random.normal(0, noise_std, augmented_hands.shape)
+            augmented_hands = augmented_hands + noise
+            
+            # Clip to reasonable ranges (landmarks should be in [0,1] for x,y and [-1,1] for z)
+            augmented_hands = np.clip(augmented_hands, -1.0, 1.0)
+        
+        return augmented_hands
+    
     def __len__(self):
         return len(self.video_sequences)
     
     def __getitem__(self, idx):
         video = torch.FloatTensor(self.video_sequences[idx]).permute(0, 3, 1, 2)  # (seq, C, H, W)
+        hands = torch.FloatTensor(self.hand_landmarks[idx])  # (seq, hand_features)
         label = torch.LongTensor([self.labels[idx]])
         
         if self.transform:
@@ -225,7 +305,7 @@ class SASLVideoDataset(Dataset):
                 transformed_frames.append(self.transform(frame))
             video = torch.stack(transformed_frames)
         
-        return video, label
+        return video, hands, label
 
 class CNNLSTMModel(nn.Module):
     """CNN+LSTM model for video classification using PyTorch"""
@@ -296,6 +376,98 @@ class CNNLSTMModel(nn.Module):
         x = self.classifier(x)
         
         return x
+
+class HandLandmarkLSTM(nn.Module):
+    """LSTM model for hand landmark sequences"""
+    
+    def __init__(self, num_classes, sequence_length=30, hand_features=126):
+        super(HandLandmarkLSTM, self).__init__()
+        
+        self.sequence_length = sequence_length
+        self.hand_features = hand_features  # 2 hands * 21 landmarks * 3 coords
+        self.num_classes = num_classes
+        
+        # Input processing
+        self.input_projection = nn.Linear(hand_features, 256)
+        self.input_dropout = nn.Dropout(0.2)
+        
+        # LSTM layers for temporal modeling
+        self.lstm1 = nn.LSTM(256, 128, bidirectional=True, batch_first=True, dropout=0.3)
+        self.lstm2 = nn.LSTM(256, 64, bidirectional=True, batch_first=True, dropout=0.3)
+        
+        # Classification layers
+        self.classifier = nn.Sequential(
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Dropout(0.4),
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(64, num_classes)
+        )
+    
+    def forward(self, x):
+        # x shape: (batch_size, sequence_length, hand_features)
+        
+        # Project hand features
+        x = self.input_projection(x)  # (batch, seq, 256)
+        x = torch.relu(x)
+        x = self.input_dropout(x)
+        
+        # LSTM processing
+        x, _ = self.lstm1(x)  # (batch, seq, 256)
+        x, _ = self.lstm2(x)  # (batch, seq, 128)
+        
+        # Global average pooling over sequence
+        x = torch.mean(x, dim=1)  # (batch, 128)
+        
+        # Classification
+        x = self.classifier(x)
+        
+        return x
+
+class CombinedCNNHandModel(nn.Module):
+    """Combined model that processes both video frames and hand landmarks"""
+    
+    def __init__(self, num_classes, sequence_length=30, input_size=(224, 224)):
+        super(CombinedCNNHandModel, self).__init__()
+        
+        self.num_classes = num_classes
+        
+        # CNN branch for video frames
+        self.cnn_branch = CNNLSTMModel(num_classes, sequence_length, input_size)
+        
+        # Hand landmark branch
+        self.hand_branch = HandLandmarkLSTM(num_classes, sequence_length)
+        
+        # Fusion layer to combine predictions
+        self.fusion = nn.Sequential(
+            nn.Linear(num_classes * 2, 256),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(128, num_classes)
+        )
+        
+        # Learnable weights for combining branches
+        self.cnn_weight = nn.Parameter(torch.tensor(0.7))
+        self.hand_weight = nn.Parameter(torch.tensor(0.3))
+    
+    def forward(self, video_frames, hand_landmarks):
+        # Get predictions from both branches
+        cnn_logits = self.cnn_branch(video_frames)
+        hand_logits = self.hand_branch(hand_landmarks)
+        
+        # Combine logits with learnable weights
+        combined_features = torch.cat([cnn_logits, hand_logits], dim=1)
+        
+        # Final prediction through fusion layer
+        final_logits = self.fusion(combined_features)
+        
+        # Also return individual predictions for analysis
+        return final_logits, cnn_logits, hand_logits
 
 class CNNOnlyVideoSASLTrainer:
     """
@@ -397,12 +569,13 @@ class CNNOnlyVideoSASLTrainer:
         all_labels = []
         
         with torch.no_grad():
-            for videos, labels_batch in tqdm(data_loader, desc="Evaluating model"):
+            for videos, hands, labels_batch in tqdm(data_loader, desc="Evaluating model"):
                 videos = videos.to(device)
+                hands = hands.to(device)
                 labels_batch = labels_batch.to(device)
                 
-                outputs = model(videos)
-                _, predicted = torch.max(outputs, 1)
+                final_outputs, _, _ = model(videos, hands)
+                _, predicted = torch.max(final_outputs, 1)
                 
                 all_predictions.extend(predicted.cpu().numpy())
                 all_labels.extend(labels_batch.cpu().numpy())
@@ -418,7 +591,7 @@ class CNNOnlyVideoSASLTrainer:
                    xticklabels=class_names, yticklabels=class_names,
                    square=True, linewidths=0.5, cbar_kws={"shrink": .8})
         
-        plt.title('CNN+LSTM Confusion Matrix', fontsize=16, fontweight='bold', pad=20)
+        plt.title('CNN+Hand Landmark Fusion Confusion Matrix', fontsize=16, fontweight='bold', pad=20)
         plt.xlabel('Predicted Label', fontsize=12, fontweight='bold')
         plt.ylabel('True Label', fontsize=12, fontweight='bold')
         plt.xticks(rotation=45, ha='right')
@@ -428,8 +601,7 @@ class CNNOnlyVideoSASLTrainer:
         accuracy_per_class = cm.diagonal() / cm.sum(axis=1)
         overall_accuracy = np.trace(cm) / np.sum(cm)
         
-        # Add accuracy info
-        info_text = f'Overall Accuracy: {overall_accuracy:.3f}\n'
+        info_text = ''
         for i, class_name in enumerate(class_names):
             info_text += f'{class_name}: {accuracy_per_class[i]:.3f}\n'
         
@@ -439,7 +611,7 @@ class CNNOnlyVideoSASLTrainer:
         plt.tight_layout()
         
         # Save confusion matrix
-        cm_filename = self.output_dir / "confusion_matrices" / "cnn_lstm_confusion_matrix.png"
+        cm_filename = self.output_dir / "confusion_matrices" / "cnn_hand_fusion_confusion_matrix.png"
         plt.savefig(cm_filename, dpi=300, bbox_inches='tight')
         plt.close()
         
@@ -463,8 +635,11 @@ class CNNOnlyVideoSASLTrainer:
             
             # Model information
             'model_info': {
-                'architecture': 'CNN+LSTM',
-                'backbone': 'EfficientNet-B0',
+                'architecture': 'CNN+Hand Landmark Fusion',
+                'cnn_backbone': 'EfficientNet-B0',
+                'hand_detection': 'MediaPipe Hands',
+                'hand_features': '126 (2 hands * 21 landmarks * 3 coords)',
+                'fusion_method': 'Learnable weighted combination + MLP',
                 'lstm_layers': 2,
                 'lstm_hidden_sizes': [256, 128],
                 'bidirectional': True,
@@ -627,6 +802,7 @@ class CNNOnlyVideoSASLTrainer:
         print(f"\\nProcessing {len(all_video_tasks)} videos with {self.num_workers} workers...")
         
         video_sequences = []
+        hand_landmarks_sequences = []
         labels = []
         cached_count = 0
         processed_count = 0
@@ -639,10 +815,11 @@ class CNNOnlyVideoSASLTrainer:
                      bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]") as pbar:
                 
                 for future in as_completed(futures):
-                    video_path, video_seq, was_cached = future.result()
+                    video_path, video_seq, hand_landmarks_seq, was_cached = future.result()
                     
-                    if video_seq is not None:
+                    if video_seq is not None and hand_landmarks_seq is not None:
                         video_sequences.append(video_seq)
+                        hand_landmarks_sequences.append(hand_landmarks_seq)
                         
                         # Determine label from path
                         class_name = Path(video_path).parent.name
@@ -663,9 +840,10 @@ class CNNOnlyVideoSASLTrainer:
         print(f"  Cached videos: {cached_count}")
         print(f"  Processed videos: {processed_count}")
         print(f"  Total loaded: {len(video_sequences)} videos")
+        print(f"  Hand landmarks extracted: {len(hand_landmarks_sequences)} sequences")
         print(f"  Classes: {len(class_names)}")
         
-        return video_sequences, labels, class_names
+        return video_sequences, hand_landmarks_sequences, labels, class_names
     
     def create_output_directories(self):
         """Create organized output directory structure"""
@@ -688,7 +866,7 @@ class CNNOnlyVideoSASLTrainer:
         print("="*80)
         
         # Load dataset
-        video_sequences, labels, class_names = self.load_video_dataset()
+        video_sequences, hand_landmarks_sequences, labels, class_names = self.load_video_dataset()
         
         if len(video_sequences) == 0:
             raise ValueError("No videos loaded. Check your dataset.")
@@ -703,8 +881,8 @@ class CNNOnlyVideoSASLTrainer:
         print(f"  Class names: {', '.join(class_names[:5])}{'...' if len(class_names) > 5 else ''}")
         
         # Split data
-        video_train, video_test, labels_train, labels_test = train_test_split(
-            video_sequences, labels, test_size=0.2, random_state=42, stratify=labels
+        video_train, video_test, hands_train, hands_test, labels_train, labels_test = train_test_split(
+            video_sequences, hand_landmarks_sequences, labels, test_size=0.2, random_state=42, stratify=labels
         )
         
         print(f"\\nData split:")
@@ -712,13 +890,13 @@ class CNNOnlyVideoSASLTrainer:
         print(f"  Testing: {len(video_test)} videos")
         
         # Create datasets and data loaders
-        print(f"\\nCreating PyTorch datasets...")
+        print(f"\\nCreating PyTorch datasets with hand landmarks...")
         
         train_dataset = SASLVideoDataset(
-            video_train, labels_train, augment_factor=self.augmentation_factor
+            video_train, hands_train, labels_train, augment_factor=self.augmentation_factor
         )
         
-        test_dataset = SASLVideoDataset(video_test, labels_test)
+        test_dataset = SASLVideoDataset(video_test, hands_test, labels_test)
         
         # Data loaders
         train_loader = DataLoader(
@@ -732,8 +910,8 @@ class CNNOnlyVideoSASLTrainer:
         )
         
         # Create model
-        print(f"\\nCreating CNN+LSTM model...")
-        model = CNNLSTMModel(self.num_classes, self.sequence_length, self.input_size).to(device)
+        print(f"\\nCreating Combined CNN+Hand Landmark model...")
+        model = CombinedCNNHandModel(self.num_classes, self.sequence_length, self.input_size).to(device)
         
         # Optimizer and loss
         optimizer = optim.Adam(model.parameters(), lr=self.learning_rate)
@@ -760,25 +938,34 @@ class CNNOnlyVideoSASLTrainer:
             train_total = 0
             
             train_pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{self.epochs} [Train]")
-            for batch_idx, (videos, labels_batch) in enumerate(train_pbar):
+            for batch_idx, (videos, hands, labels_batch) in enumerate(train_pbar):
                 videos = videos.to(device)
+                hands = hands.to(device)
                 labels_batch = labels_batch.squeeze().to(device)
                 
                 optimizer.zero_grad()
-                outputs = model(videos)
-                loss = criterion(outputs, labels_batch)
-                loss.backward()
+                final_outputs, cnn_outputs, hand_outputs = model(videos, hands)
+                
+                # Calculate loss on final combined output
+                loss = criterion(final_outputs, labels_batch)
+                
+                # Optional: Add auxiliary losses for individual branches
+                aux_loss_cnn = criterion(cnn_outputs, labels_batch)
+                aux_loss_hand = criterion(hand_outputs, labels_batch)
+                total_loss = loss + 0.2 * aux_loss_cnn + 0.1 * aux_loss_hand
+                
+                total_loss.backward()
                 optimizer.step()
                 
-                train_loss += loss.item()
-                _, predicted = torch.max(outputs.data, 1)
+                train_loss += total_loss.item()
+                _, predicted = torch.max(final_outputs.data, 1)
                 train_total += labels_batch.size(0)
                 train_correct += (predicted == labels_batch).sum().item()
                 
                 # Update progress bar
                 train_acc = 100 * train_correct / train_total
                 train_pbar.set_postfix({
-                    'Loss': f'{loss.item():.4f}',
+                    'Loss': f'{total_loss.item():.4f}',
                     'Acc': f'{train_acc:.1f}%'
                 })
             
@@ -790,15 +977,18 @@ class CNNOnlyVideoSASLTrainer:
             
             with torch.no_grad():
                 val_pbar = tqdm(test_loader, desc=f"Epoch {epoch+1}/{self.epochs} [Val]")
-                for videos, labels_batch in val_pbar:
+                for videos, hands, labels_batch in val_pbar:
                     videos = videos.to(device)
+                    hands = hands.to(device)
                     labels_batch = labels_batch.squeeze().to(device)
                     
-                    outputs = model(videos)
-                    loss = criterion(outputs, labels_batch)
+                    final_outputs, cnn_outputs, hand_outputs = model(videos, hands)
+                    
+                    # Use combined output for validation
+                    loss = criterion(final_outputs, labels_batch)
                     
                     val_loss += loss.item()
-                    _, predicted = torch.max(outputs.data, 1)
+                    _, predicted = torch.max(final_outputs.data, 1)
                     val_total += labels_batch.size(0)
                     val_correct += (predicted == labels_batch).sum().item()
                     
@@ -856,7 +1046,7 @@ class CNNOnlyVideoSASLTrainer:
         plot_file = self.plot_training_history(training_history)
         
         # Load best model for confusion matrix generation
-        best_model = CNNLSTMModel(self.num_classes, self.sequence_length, self.input_size).to(device)
+        best_model = CombinedCNNHandModel(self.num_classes, self.sequence_length, self.input_size).to(device)
         best_model.load_state_dict(torch.load(self.output_dir / "models" / "best_sasl_cnn_lstm_model.pth"))
         
         # Generate confusion matrix
