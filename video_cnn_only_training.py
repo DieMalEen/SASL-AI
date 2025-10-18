@@ -572,13 +572,15 @@ class CNNOnlyVideoSASLTrainer:
             for videos, hands, labels_batch in tqdm(data_loader, desc="Evaluating model"):
                 videos = videos.to(device)
                 hands = hands.to(device)
-                labels_batch = labels_batch.to(device)
+                # Ensure labels have shape (batch,) instead of (batch,1)
+                labels_batch = labels_batch.squeeze().to(device)
                 
                 final_outputs, _, _ = model(videos, hands)
                 _, predicted = torch.max(final_outputs, 1)
                 
-                all_predictions.extend(predicted.cpu().numpy())
-                all_labels.extend(labels_batch.cpu().numpy())
+                # Extend with Python lists of ints to avoid shape ambiguity
+                all_predictions.extend(predicted.cpu().tolist())
+                all_labels.extend(labels_batch.cpu().tolist())
         
         # Generate confusion matrix
         cm = confusion_matrix(all_labels, all_predictions)
@@ -1068,7 +1070,7 @@ class CNNOnlyVideoSASLTrainer:
         print(f"\\nOutput Directory: {self.output_dir}")
         print(f"  Model: best_sasl_cnn_lstm_model.pth")
         print(f"  Training Plot: cnn_lstm_training_history.png")
-        print(f"  Confusion Matrix: cnn_lstm_confusion_matrix.png")
+        print(f"  Confusion Matrix: cnn_hand_fusion_confusion_matrix.png")
         print(f"  Results: cnn_training_results.json")
         print(f"  Summary: training_summary.txt")
         

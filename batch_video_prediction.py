@@ -34,15 +34,24 @@ from tqdm import tqdm
 # Set device
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-# Import the exact same model class from the training file to ensure compatibility
+# Import the exact same model classes from the training file to ensure compatibility
 try:
-    from video_cnn_only_training import CNNLSTMModel
-    print("Using CNNLSTMModel from training file for compatibility")
-except ImportError as e:
-    print(f"Warning: Could not import CNNLSTMModel from training file: {e}")
-    print("Using fallback model definition matching training file architecture")
+    from video_cnn_only_training import CNNLSTMModel, CombinedCNNHandModel, HandLandmarkLSTM, MEDIAPIPE_AVAILABLE
+    print("Using CNNLSTMModel, CombinedCNNHandModel, and HandLandmarkLSTM from training file for compatibility")
     
-    # Fallback model definition - EXACT COPY from training file
+    # Import MediaPipe if available
+    if MEDIAPIPE_AVAILABLE:
+        import mediapipe as mp
+        print("MediaPipe available for hand landmark extraction")
+    else:
+        print("MediaPipe not available - will use CNN-only fallback")
+        
+except ImportError as e:
+    print(f"Warning: Could not import models from training file: {e}")
+    print("Using fallback model definitions matching training file architecture")
+    MEDIAPIPE_AVAILABLE = False
+    
+    # Fallback model definitions - EXACT COPIES from training file
     import timm
     
     class CNNLSTMModel(nn.Module):
@@ -115,24 +124,171 @@ except ImportError as e:
             
             return x
 
-def process_video_for_prediction(video_path, sequence_length=30, input_size=(224, 224)):
+    class HandLandmarkLSTM(nn.Module):
+        """LSTM model for hand landmark sequences"""
+        
+        def __init__(self, num_classes, sequence_length=30, hand_features=126):
+            super(HandLandmarkLSTM, self).__init__()
+            
+            self.sequence_length = sequence_length
+            self.hand_features = hand_features  # 2 hands * 21 landmarks * 3 coords
+            self.num_classes = num_classes
+            
+            # Input processing
+            self.input_projection = nn.Linear(hand_features, 256)
+            self.input_dropout = nn.Dropout(0.2)
+            
+            # LSTM layers for temporal modeling
+            self.lstm1 = nn.LSTM(256, 128, bidirectional=True, batch_first=True, dropout=0.3)
+            self.lstm2 = nn.LSTM(256, 64, bidirectional=True, batch_first=True, dropout=0.3)
+            
+            # Classification layers
+            self.classifier = nn.Sequential(
+                nn.Linear(128, 128),
+                nn.ReLU(),
+                nn.Dropout(0.4),
+                nn.Linear(128, 64),
+                nn.ReLU(),
+                nn.Dropout(0.3),
+                nn.Linear(64, num_classes)
+            )
+        
+        def forward(self, x):
+            # x shape: (batch_size, sequence_length, hand_features)
+            
+            # Project hand features
+            x = self.input_projection(x)  # (batch, seq, 256)
+            x = torch.relu(x)
+            x = self.input_dropout(x)
+            
+            # LSTM processing
+            x, _ = self.lstm1(x)  # (batch, seq, 256)
+            x, _ = self.lstm2(x)  # (batch, seq, 128)
+            
+            # Global average pooling over sequence
+            x = torch.mean(x, dim=1)  # (batch, 128)
+            
+            # Classification
+            x = self.classifier(x)
+            
+            return x
+
+    class CombinedCNNHandModel(nn.Module):
+        """Combined model that processes both video frames and hand landmarks"""
+        
+        def __init__(self, num_classes, lstm_hidden_size=256, lstm_num_layers=2, 
+                     hand_lstm_hidden_size=256, hand_lstm_num_layers=2,
+                     fusion_hidden_size=512, dropout_rate=0.3):
+            super(CombinedCNNHandModel, self).__init__()
+            
+            self.num_classes = num_classes
+            
+            # CNN branch for video frames
+            self.cnn_branch = CNNLSTMModel(
+                num_classes=num_classes,
+                lstm_hidden_size=lstm_hidden_size,
+                lstm_num_layers=lstm_num_layers,
+                dropout_rate=dropout_rate
+            )
+            
+            # Hand landmark branch
+            self.hand_branch = HandLandmarkLSTM(
+                num_classes=num_classes,
+                lstm_hidden_size=hand_lstm_hidden_size,
+                lstm_num_layers=hand_lstm_num_layers
+            )
+            
+            # Fusion layer to combine predictions
+            self.fusion = nn.Sequential(
+                nn.Linear(num_classes * 2, fusion_hidden_size),
+                nn.ReLU(),
+                nn.Dropout(dropout_rate),
+                nn.Linear(fusion_hidden_size, 256),
+                nn.ReLU(),
+                nn.Dropout(dropout_rate * 0.5),
+                nn.Linear(256, num_classes)
+            )
+            
+            # Learnable weights for combining branches
+            self.cnn_weight = nn.Parameter(torch.tensor(0.7))
+            self.hand_weight = nn.Parameter(torch.tensor(0.3))
+        
+        def forward(self, video_frames, hand_landmarks):
+            # Get predictions from both branches
+            cnn_logits = self.cnn_branch(video_frames)
+            hand_logits = self.hand_branch(hand_landmarks)
+            
+            # Combine logits with learnable weights
+            combined_features = torch.cat([cnn_logits, hand_logits], dim=1)
+            
+            # Final prediction through fusion layer
+            final_logits = self.fusion(combined_features)
+            
+            # Also return individual predictions for analysis
+            return final_logits, cnn_logits, hand_logits
+
+def extract_hand_landmarks_from_frame(rgb_frame, hands_processor):
+    """Extract hand landmarks from a single RGB frame"""
+    if not MEDIAPIPE_AVAILABLE or hands_processor is None:
+        return [0.0] * 126  # Return zeros if MediaPipe not available
+    
+    try:
+        results = hands_processor.process(rgb_frame)
+        
+        frame_landmarks = []
+        
+        if results.multi_hand_landmarks:
+            for hand_landmarks in results.multi_hand_landmarks:
+                hand_coords = []
+                for landmark in hand_landmarks.landmark:
+                    # Normalize coordinates to [0,1] relative to frame size
+                    hand_coords.extend([landmark.x, landmark.y, landmark.z])
+                frame_landmarks.extend(hand_coords)
+        
+        # Pad to consistent size (2 hands * 21 landmarks * 3 coords = 126 features)
+        while len(frame_landmarks) < 126:
+            frame_landmarks.append(0.0)
+        
+        # Truncate if somehow more than 126 features
+        frame_landmarks = frame_landmarks[:126]
+        
+        return frame_landmarks
+        
+    except Exception as e:
+        print(f"Error extracting hand landmarks: {e}")
+        return [0.0] * 126
+
+def process_video_for_prediction(video_path, sequence_length=30, input_size=(224, 224), extract_hands=True):
     """
-    Process a single video file for prediction
+    Process a single video file for prediction, extracting both video frames and hand landmarks
     
     Args:
         video_path: Path to video file
         sequence_length: Number of frames to extract
         input_size: Target size for frames
+        extract_hands: Whether to extract hand landmarks
         
     Returns:
-        numpy.ndarray: Preprocessed video sequence or None if failed
+        tuple: (video_sequence, hand_landmarks_sequence) or (None, None) if failed
     """
     try:
+        # Initialize MediaPipe hands if needed
+        hands_processor = None
+        if extract_hands and MEDIAPIPE_AVAILABLE:
+            mp_hands = mp.solutions.hands
+            hands_processor = mp_hands.Hands(
+                static_image_mode=False,
+                max_num_hands=2,
+                min_detection_confidence=0.5,
+                min_tracking_confidence=0.5
+            )
+        
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
-            return None
+            return None, None
         
         frames = []
+        hand_landmarks_seq = []
         
         while True:
             ret, frame = cap.read()
@@ -143,41 +299,57 @@ def process_video_for_prediction(video_path, sequence_length=30, input_size=(224
             frame = cv2.resize(frame, input_size)
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             frames.append(rgb_frame)
+            
+            # Extract hand landmarks if requested
+            if extract_hands:
+                hand_landmarks = extract_hand_landmarks_from_frame(rgb_frame, hands_processor)
+                hand_landmarks_seq.append(hand_landmarks)
+            else:
+                hand_landmarks_seq.append([0.0] * 126)
         
         cap.release()
         
-        if len(frames) == 0:
-            return None
+        # Clean up MediaPipe
+        if hands_processor is not None:
+            hands_processor.close()
         
-        # Adjust sequence length
+        if len(frames) == 0:
+            return None, None
+        
+        # Adjust sequence length for both video and hand landmarks
         if len(frames) > sequence_length:
             # Take evenly spaced frames
             indices = np.linspace(0, len(frames) - 1, sequence_length, dtype=int)
             frames = [frames[i] for i in indices]
+            hand_landmarks_seq = [hand_landmarks_seq[i] for i in indices]
         elif len(frames) < sequence_length:
-            # Repeat frames to reach target length
+            # Repeat frames and landmarks to reach target length
             while len(frames) < sequence_length:
                 frames.append(frames[-1])  # Repeat last frame
+                hand_landmarks_seq.append(hand_landmarks_seq[-1])  # Repeat last landmarks
         
-        # Convert to numpy array and normalize
-        video_sequence = np.array(frames, dtype=np.float32) / 255.0
+        # Convert to numpy arrays and normalize (MATCH TRAINING FORMAT EXACTLY)
+        video_sequence = np.array(frames, dtype=np.float32) / 255.0  # Normalize first
+        hand_landmarks_sequence = np.array(hand_landmarks_seq, dtype=np.float32)
         
-        # Transpose to (sequence_length, channels, height, width)
-        video_sequence = video_sequence.transpose(0, 3, 1, 2)
+        # Convert to tensor format matching training: (seq, C, H, W)
+        # Training uses: torch.FloatTensor(video).permute(0, 3, 1, 2)
+        # We need to match this exactly
+        video_sequence = np.transpose(video_sequence, (0, 3, 1, 2))  # (seq, H, W, C) -> (seq, C, H, W)
         
-        return video_sequence
+        return video_sequence, hand_landmarks_sequence
         
     except Exception as e:
         print(f"Error processing video {video_path}: {e}")
-        return None
+        return None, None
 
 def predict_videos_in_folder(model_path, class_names_path, video_folder_path, 
                            output_predictions_path=None, confidence_threshold=0.5):
     """
-    Predict hand signs for all videos in a folder
+    Predict hand signs for all videos in a folder using either CNN-only or Combined CNN+Hand model
     
     Args:
-        model_path: Path to the trained CNN+LSTM model (.pth file)
+        model_path: Path to the trained model (.pth file)
         class_names_path: Path to class names JSON file
         video_folder_path: Path to folder containing videos to predict
         output_predictions_path: Optional path to save predictions JSON file
@@ -198,12 +370,36 @@ def predict_videos_in_folder(model_path, class_names_path, video_folder_path,
         print(f"ERROR: Could not load class names from {class_names_path}: {e}")
         return None
     
-    # Load trained model
+    # Load trained model and determine type
     try:
-        model = CNNLSTMModel(num_classes=len(class_names)).to(device)
-        model.load_state_dict(torch.load(model_path, map_location=device))
+        checkpoint = torch.load(model_path, map_location=device)
+        
+        # Check if it's a combined model by looking for hand-related keys in state_dict
+        state = checkpoint.get('model_state_dict', checkpoint)
+        state_keys = list(state.keys())
+        is_combined_model = any(
+            key.startswith('hand_branch') or key.startswith('fusion') or key.startswith('hand_')
+            for key in state_keys
+        )
+        
+        if is_combined_model:
+            # Load Combined CNN+Hand model
+            model = CombinedCNNHandModel(num_classes=len(class_names)).to(device)
+            print(f"Loading Combined CNN+Hand model with {len(class_names)} classes")
+        else:
+            # Load CNN-only model
+            model = CNNLSTMModel(num_classes=len(class_names)).to(device)
+            print(f"Loading CNN-only model with {len(class_names)} classes")
+        
+        # Load state dict (handle both checkpoint format and direct state dict)
+        if 'model_state_dict' in checkpoint:
+            model.load_state_dict(checkpoint['model_state_dict'])
+        else:
+            model.load_state_dict(checkpoint)
+            
         model.eval()
         print(f"Model loaded successfully from {model_path}")
+        
     except Exception as e:
         print(f"ERROR: Could not load model from {model_path}: {e}")
         return None
@@ -226,14 +422,17 @@ def predict_videos_in_folder(model_path, class_names_path, video_folder_path,
         return None
     
     print(f"Found {len(video_files)} video files to process...")
+    print(f"Model type: {'Combined CNN+Hand' if is_combined_model else 'CNN-only'}")
     
     predictions_results = {}
     
     # Process each video
     for video_file in tqdm(video_files, desc="Processing videos"):
         try:
-            # Process video to get frame sequence
-            video_sequence = process_video_for_prediction(video_file)
+            # Process video to get frame sequence (and hand landmarks if needed)
+            video_sequence, hand_landmarks_sequence = process_video_for_prediction(
+                video_file, extract_hands=is_combined_model
+            )
             
             if video_sequence is None:
                 predictions_results[video_file.name] = {
@@ -245,11 +444,19 @@ def predict_videos_in_folder(model_path, class_names_path, video_folder_path,
                 }
                 continue
             
-            # Convert to tensor and predict
+            # Convert to tensors with CORRECT format matching training and real-time recognition
+            # Input shape: (seq, C, H, W) -> need (batch, seq, C, H, W) after unsqueeze
             video_tensor = torch.tensor(video_sequence).float().unsqueeze(0).to(device)
             
             with torch.no_grad():
-                outputs = model(video_tensor)
+                if is_combined_model:
+                    # Use both video and hand landmarks
+                    hand_tensor = torch.tensor(hand_landmarks_sequence).float().unsqueeze(0).to(device)
+                    outputs, cnn_outputs, hand_outputs = model(video_tensor, hand_tensor)
+                else:
+                    # Use video only
+                    outputs = model(video_tensor)
+                
                 probabilities = torch.softmax(outputs, dim=1)
                 confidence, predicted_class_idx = torch.max(probabilities, 1)
                 
@@ -267,7 +474,8 @@ def predict_videos_in_folder(model_path, class_names_path, video_folder_path,
                 'prediction': predicted_class,
                 'confidence': confidence,
                 'above_threshold': confidence >= confidence_threshold,
-                'all_probabilities': all_probs
+                'all_probabilities': all_probs,
+                'model_type': 'Combined CNN+Hand' if is_combined_model else 'CNN-only'
             }
             
             # Print result
@@ -295,6 +503,7 @@ def predict_videos_in_folder(model_path, class_names_path, video_folder_path,
     print(f"  Successfully processed: {successful_predictions}")
     print(f"  High confidence (>{confidence_threshold:.2f}): {high_confidence_predictions}")
     print(f"  Failed/Errors: {len(video_files) - successful_predictions}")
+    print(f"  Model type: {'Combined CNN+Hand' if is_combined_model else 'CNN-only'}")
     
     # Save results to file if requested
     if output_predictions_path:
@@ -309,6 +518,7 @@ def predict_videos_in_folder(model_path, class_names_path, video_folder_path,
                     'class_names_path': str(class_names_path),
                     'video_folder_path': str(video_folder_path),
                     'confidence_threshold': confidence_threshold,
+                    'model_type': 'Combined CNN+Hand' if is_combined_model else 'CNN-only',
                     'total_videos': len(video_files),
                     'successful_predictions': successful_predictions,
                     'high_confidence_predictions': high_confidence_predictions,

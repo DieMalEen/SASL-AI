@@ -5,8 +5,8 @@ SASL-AI Main Menu System
 
 Complete SASL recognition system with:
 1. Video data collection
-2. CNN-only training (recommended) and dual model training (legacy)
-3. CNN-only live recognition (recommended) and dual model recognition (legacy)
+2. CNN-only training (optimized and recommended)
+3. CNN-only live recognition (fast and accurate)
 4. Model management and outputs
 
 Navigate through the menu to access all features.
@@ -109,13 +109,11 @@ def show_main_menu():
     print(f"\n Main Menu:")
     print(f"   1.  Collect Video Data")
     print(f"   2.  Train CNN-Only Models")
-    print(f"   3.  Train Dual Models")
-    print(f"   4.  CNN-Only Live Recognition")
-    print(f"   5.  Dual Model Live Recognition")
-    print(f"   6.  Batch Video Prediction")
-    print(f"   7.  Manage Models & Outputs")
-    print(f"   8.  System Information")
-    print(f"   9.  Exit")
+    print(f"   3.  CNN-Only Live Recognition")
+    print(f"   4.  Batch Video Prediction")
+    print(f"   5.  Manage Models & Outputs")
+    print(f"   6.  System Information")
+    print(f"   7.  Exit")
     print(f"\n" + "=" * 70)
 
 def configure_cnn_training_parameters():
@@ -338,81 +336,6 @@ def train_cnn_only_models():
         traceback.print_exc()
         input("Press Enter to continue...")
 
-def train_dual_models():
-    """Launch dual model training"""
-    clear_screen()
-    print("SASL Dual Model Training")
-    print("=" * 50)
-    print("WARNING: This trains both CNN+LSTM and Pose models.")
-    print("The CNN-only approach (option 2) is recommended for better performance.")
-    
-    # Check if video dataset exists
-    video_dataset_path = Path("video_dataset")
-    has_classes = video_dataset_path.exists() and any(d.is_dir() and d.name != '.gitkeep' for d in video_dataset_path.iterdir())
-    if not has_classes:
-        print("No video dataset found!")
-        print("Please collect video data first using option 1.")
-        input("Press Enter to continue...")
-        return
-    
-    # Show dataset info
-    stats = get_dataset_stats()
-    print(f"\nDataset Information:")
-    print(f"   Classes: {stats['classes']}")
-    print(f"   Total Videos: {stats['total_videos']}")
-    print(f"   Average per class: {stats['total_videos'] / max(stats['classes'], 1):.1f}")
-    
-    if stats['classes'] < 2:
-        print("Need at least 2 classes to train models!")
-        input("Press Enter to continue...")
-        return
-    
-    if stats['total_videos'] < 10:
-        print("!!! Warning: Very small dataset. Consider collecting more videos.")
-        print("Recommended: At least 5-10 videos per class")
-    
-    print(f"\nThis will train the legacy dual model system.")
-    print(f"Note: CNN-only training (option 2) typically achieves better results.")
-    
-    choice = input(f"\nProceed with dual model training? (y/n): ").strip().lower()
-    
-    if choice != 'y':
-        return
-    
-    try:
-        # Import and run dual model training
-        from video_based_sasl_training import VideoSASLTrainer
-        
-        print("\nInitializing dual model trainer...")
-        trainer = VideoSASLTrainer(
-            video_dataset_path="video_dataset",
-            sequence_length=30,
-            input_size=(224, 224),
-            epochs=50,
-            batch_size_cnn=4,
-            batch_size_pose=8
-        )
-        
-        print("Starting dual model training process...")
-        cnn_lstm_model, pose_lstm_model = trainer.train_models()
-        
-        if cnn_lstm_model is not None:
-            print(f"\nDual model training completed!")
-            print(f"  Note: Consider using CNN-only training for better performance")
-        else:
-            print(f"\n✗ Training failed. Check your dataset.")
-        
-        input("Press Enter to continue...")
-        
-    except ImportError as e:
-        print(f"ERROR: Could not import dual model trainer: {e}")
-        input("Press Enter to continue...")
-    except Exception as e:
-        print(f"ERROR: Error during dual model training: {e}")
-        import traceback
-        traceback.print_exc()
-        input("Press Enter to continue...")
-
 def live_cnn_only_recognition():
     """Launch CNN-only live camera recognition"""
     clear_screen()
@@ -524,125 +447,6 @@ def live_cnn_only_recognition():
         input("Press Enter to continue...")
     except Exception as e:
         print(f"ERROR: Error during CNN-only recognition: {e}")
-        import traceback
-        traceback.print_exc()
-        input("Press Enter to continue...")
-
-def live_dual_model_recognition():
-    """Launch dual model live camera recognition"""
-    clear_screen()
-    print("Dual Model Live SASL Recognition")
-    print("=" * 50)
-    print("WARNING: This uses both CNN+LSTM and Pose models.")
-    print("The CNN-only approach (option 4) is recommended for better performance.")
-    
-    # Check for the latest training outputs
-    outputs_dir = Path("outputs")
-    model_files = []
-    
-    if outputs_dir.exists():
-        # Find the latest training directory
-        training_dirs = [d for d in outputs_dir.iterdir() if d.is_dir() and d.name.startswith("training_")]
-        if training_dirs:
-            # Sort by name (timestamp) and get the latest
-            latest_training_dir = sorted(training_dirs, key=lambda x: x.name)[-1]
-            print(f"Found latest training session: {latest_training_dir.name}")
-            
-            # Check for models in the latest training directory
-            models_dir = latest_training_dir / "models"
-            results_dir = latest_training_dir / "results"
-            
-            if models_dir.exists() and results_dir.exists():
-                cnn_model_path = models_dir / "best_sasl_cnn_lstm_model.pth"
-                pose_model_path = models_dir / "best_sasl_pose_lstm_model.pth"
-                
-                # Check for class names - try both pytorch_sasl_classes.json and class_names.json
-                classes_path = results_dir / "pytorch_sasl_classes.json"
-                if not classes_path.exists():
-                    classes_path = results_dir / "class_names.json"
-                
-                if cnn_model_path.exists() and pose_model_path.exists() and classes_path.exists():
-                    model_files = [str(cnn_model_path), str(pose_model_path), str(classes_path)]
-                    print(f"Found CNN+LSTM model: {cnn_model_path}")
-                    print(f"Found Pose LSTM model: {pose_model_path}")
-                    print(f"Found class names: {classes_path}")
-                else:
-                    print(f"Missing model files in {models_dir}")
-            else:
-                print(f"Models or results directory not found in {latest_training_dir}")
-        else:
-            print("No training directories found in outputs/")
-    
-    # Fallback: Check for models in root directory or outputs/
-    if not model_files:
-        print("Checking for models in fallback locations...")
-        fallback_files = [
-            "best_sasl_cnn_lstm_model.pth",
-            "best_sasl_pose_lstm_model.pth", 
-            "pytorch_sasl_classes.json"
-        ]
-        
-        # Check outputs directory first, then root
-        for model_file in fallback_files:
-            if (outputs_dir / model_file).exists():
-                model_files.append(str(outputs_dir / model_file))
-            elif Path(model_file).exists():
-                model_files.append(model_file)
-            else:
-                model_files.append(None)
-        
-        # Check if all files found
-        if None in model_files:
-            missing_files = [f for f, path in zip(fallback_files, model_files) if path is None]
-            print(f"ERROR: Missing PyTorch model files: {missing_files}")
-            print("\nTo fix this issue:")
-            print("1. Run training first using option 3")
-            print("2. Or collect training data using option 1")
-            print("3. Make sure training completes successfully")
-            input("Press Enter to continue...")
-            return
-        else:
-            print("Found models in fallback locations")
-    
-    if not model_files or len(model_files) != 3:
-        print("ERROR: Could not locate all required model files")
-        print("\nTo fix this issue:")
-        print("1. Run training first using option 3")
-        print("2. Or collect training data using option 1") 
-        print("3. Make sure training completes successfully")
-        input("Press Enter to continue...")
-        return
-    
-    try:
-        with open(model_files[2], 'r') as f:
-            classes = json.load(f)
-        
-        print(f"FOUND: Trained models for {len(classes)} SASL classes:")
-        for i, class_name in enumerate(classes, 1):
-            print(f"   {i:2d}. {class_name}")
-        
-        print(f"\n Starting live dual model camera recognition...")
-        print(f"Note: CNN-only recognition (option 4) typically performs better")
-        
-        # Import and run dual model recognition
-        from sasl_camera_recognition import SASLCameraRecognition
-        
-        recognition = SASLCameraRecognition(
-            cnn_lstm_model_path=model_files[0],
-            pose_lstm_model_path=model_files[1],
-            classes_path=model_files[2]
-        )
-        
-        recognition.run_live_recognition()
-        
-    except FileNotFoundError as e:
-        print(f"ERROR: Model file not found: {e}")
-        input("Press Enter to continue...")
-    except ImportError as e:
-        print(f"ERROR: Could not import dual model recognition: {e}")
-        input("Press Enter to continue...")
-    except Exception as e:
-        print(f"ERROR: Error during dual model recognition: {e}")
         import traceback
         traceback.print_exc()
         input("Press Enter to continue...")
@@ -903,25 +707,21 @@ def main():
     while True:
         show_main_menu()
         
-        choice = input("Enter your choice (1-9): ").strip()
+        choice = input("Enter your choice (1-7): ").strip()
         
         if choice == '1':
             collect_video_data()
         elif choice == '2':
             train_cnn_only_models()
         elif choice == '3':
-            train_dual_models()
-        elif choice == '4':
             live_cnn_only_recognition()
-        elif choice == '5':
-            live_dual_model_recognition()
-        elif choice == '6':
+        elif choice == '4':
             batch_video_prediction()
-        elif choice == '7':
+        elif choice == '5':
             manage_models_and_outputs()
-        elif choice == '8':
+        elif choice == '6':
             show_system_info()
-        elif choice == '9':
+        elif choice == '7':
             clear_screen()
             print("Thank you for using SASL-AI Recognition System!")
             print("Goodbye!")

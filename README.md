@@ -1,4 +1,4 @@
-# SASL-AI Recognition System (PyTorch Edition)
+# SASL-AI Recognition System
 
 <div align="center">
 
@@ -8,7 +8,7 @@
 
 **Advanced South African Sign Language Recognition using PyTorch Deep Learning**
 
-Real-time SASL recognition with CNN+LSTM and Pose LSTM models, comprehensive batch monitoring, and professional deployment capabilities.
+Real-time SASL recognition with CNN+LSTM and MediaPipe hand landmark fusion models for enhanced accuracy and robustness.
 
 </div>
 
@@ -20,26 +20,30 @@ git clone <your-repo-url>
 cd SASL-AI
 pip install -r requirements.txt
 
-# Run the system
-python main.py
+# Run video collection
+python sasl_video_collector.py
+
+# Train the model
+python video_cnn_only_training.py
+
+# Run live recognition
+python sasl_cnn_only_recognition.py
 ```
 
-## Features
+## System Overview
 
-### Core Capabilities
-- **Real-time SASL Recognition**: Live camera-based sign language detection
-- **Dual Model Architecture**: CNN+LSTM and Pose LSTM ensemble for robust predictions
-- **PyTorch Backend**: Modern deep learning framework with GPU acceleration
-- **Comprehensive Training**: Advanced batch monitoring with real-time progress tracking
-- **Professional UI**: Clean interfaces with confidence scores and visual feedback
+### Core Architecture
+- **CNN+LSTM Model**: EfficientNet backbone with bidirectional LSTM for temporal modeling
+- **MediaPipe Hand Landmarks**: 21 hand landmarks per hand (up to 2 hands) for precise gesture analysis
+- **Combined Fusion Model**: Integrates video frames and hand landmark data for superior accuracy
+- **Real-time Processing**: 30+ FPS recognition with GPU acceleration
+- **Hand Overlay Toggle**: Visual feedback showing detected hand landmarks
 
-### Technical Features
-- **Batch Visibility**: Real-time training progress with tqdm progress bars
-- **GPU Optimization**: Automatic CUDA detection and memory management
-- **Data Augmentation**: Advanced augmentation pipeline for robust model training
-- **Transfer Learning**: EfficientNet backbone via timm library
-- **Pose Integration**: MediaPipe pose and hand landmark processing
-- **Model Ensembling**: Weighted prediction combination for improved accuracy
+### Key Components
+- **Video Data Collection**: Structured dataset creation with automated organization
+- **PyTorch Training Pipeline**: Modern deep learning with comprehensive monitoring
+- **Live Camera Recognition**: Real-time sign language detection with confidence scoring
+- **Hand Landmark Integration**: MediaPipe-powered hand tracking for enhanced accuracy
 
 ## Installation
 
@@ -47,7 +51,7 @@ python main.py
 - **Python**: 3.8 or higher
 - **OS**: Windows 10/11, macOS, or Linux
 - **GPU**: CUDA-compatible GPU (optional, but recommended)
-- **RAM**: 8GB minimum, 16GB recommended
+- **RAM**: 8GB minimum, 16GB recommended for training
 - **Storage**: 5GB free space for models and dataset
 
 ### Dependencies Installation
@@ -74,8 +78,8 @@ timm>=0.9.0
 
 # Computer Vision & Processing  
 opencv-python>=4.8.0
-mediapipe>=0.10.0
-Pillow>=10.0.0
+mediapipe>=0.10.7
+pillow>=10.0.0
 
 # Scientific Computing
 numpy>=1.24.0
@@ -88,26 +92,26 @@ matplotlib>=3.7.0
 seaborn>=0.12.0
 ```
 
-## 📖 Usage Guide
+## Usage Guide
 
-### 1. Main Menu System
+### 1. Data Collection
 
-Launch the interactive menu system:
+Create training videos for your SASL signs:
 
 ```bash
-python main.py
+python sasl_video_collector.py
 ```
 
-**Menu Options:**
-1. **Video Data Collection**: Collect training videos for custom signs
-2. **PyTorch Model Training**: Train CNN+LSTM and Pose LSTM models
-3. **Live Camera Recognition**: Real-time SASL recognition
-4. **Model Management**: View outputs and manage trained models
+**Collection Process:**
+- Select sign class name
+- Record 2-5 second videos per sign
+- Automatic file naming and organization
+- Real-time video preview
+- Structured dataset creation
 
-### 2. Dataset Preparation
-
+**Dataset Structure:**
 ```
-dataset/
+video_dataset/
 ├── sign1/
 │   ├── video001.mp4
 │   ├── video002.mp4
@@ -118,77 +122,114 @@ dataset/
 └── ...
 ```
 
-**Dataset Guidelines:**
-- **Video Length**: 2-5 seconds per video
-- **Resolution**: Minimum 480p, 720p recommended
-- **Lighting**: Good, consistent lighting
-- **Background**: Clean, contrasting background
-- **Signer Position**: Full upper body visible
-- **Examples per Class**: Minimum 20 videos, 50+ recommended
+### 2. Model Training
 
-## Training System
+Train the combined CNN+Hand landmark model:
 
-### Advanced PyTorch Training Pipeline
-
-The PyTorch training system provides comprehensive batch monitoring and professional-grade model training.
-
-#### Key Features:
-- **Real-time Progress Tracking**: tqdm progress bars with loss/accuracy
-- **Dual Model Training**: CNN+LSTM and Pose LSTM models
-- **Advanced Data Augmentation**: Brightness, contrast, rotation, noise
-- **GPU Acceleration**: Automatic CUDA optimization
-- **Early Stopping**: Prevent overfitting with patience mechanism
-- **Learning Rate Scheduling**: Adaptive learning rate adjustment
-
-#### Training Output Example:
-
-```
-Starting PyTorch SASL Training
-Device: cuda:0
-Classes: 50
-Sequence length: 30
-
-Training Progress:
-Epoch 1/100: 100%|██████████| 125/125 [02:15<00:00, 0.92it/s, loss=2.34, acc=45.2%]
-Epoch 2/100: 100%|██████████| 125/125 [02:12<00:00, 0.94it/s, loss=1.89, acc=58.7%]
-...
-
-Training completed successfully!
-Best CNN+LSTM model saved: best_sasl_cnn_lstm_model.pth
-Best Pose LSTM model saved: best_sasl_pose_lstm_model.pth
-```
-
-## Live Recognition
-
-### Real-time Camera Recognition
-
-Launch live recognition:
 ```bash
-python sasl_camera_recognition.py
+python video_cnn_only_training.py
 ```
 
-#### Features:
-- **Dual Model Ensemble**: CNN+LSTM + Pose LSTM predictions
+**Training Features:**
+- **Dual Architecture**: CNN branch for video frames, Hand branch for MediaPipe landmarks
+- **Data Augmentation**: Brightness, contrast, rotation, noise, and temporal augmentation
+- **Early Stopping**: Prevents overfitting with patience mechanism
+- **Learning Rate Scheduling**: Adaptive learning rate adjustment
+- **Comprehensive Monitoring**: Real-time loss and accuracy tracking
+- **GPU Acceleration**: Automatic CUDA detection and optimization
+
+**Training Output Structure:**
+```
+outputs/training_YYYYMMDD_HHMMSS/
+├── models/
+│   └── best_sasl_cnn_lstm_model.pth
+├── plots/
+│   └── cnn_lstm_training_history.png
+├── confusion_matrices/
+│   └── cnn_hand_fusion_confusion_matrix.png
+└── results/
+    ├── cnn_training_results.json
+    ├── class_names.json
+    └── training_summary.txt
+```
+
+### 3. Live Recognition
+
+Launch real-time SASL recognition:
+
+```bash
+python sasl_cnn_only_recognition.py
+```
+
+**Recognition Features:**
+- **Combined Model Support**: Uses both CNN and hand landmark data when available
+- **Automatic Fallback**: Falls back to CNN-only for older models
+- **Hand Overlay Toggle**: Press 'H' to show/hide hand landmarks visualization
 - **Confidence Filtering**: Adjustable confidence thresholds
-- **Top-3 Predictions**: Multiple prediction display
-- **Visual Feedback**: MediaPipe landmark overlay
+- **Top-3 Predictions**: Multiple prediction display with confidence scores
 - **Prediction Smoothing**: Temporal smoothing for stable results
 
-#### Controls:
-- **'q'**: Quit recognition
-- **'r'**: Reset prediction buffers
+**Controls:**
+- **'Q'**: Quit recognition
+- **'R'**: Reset prediction buffer
+- **'H'**: Toggle hand landmarks overlay (when available)
 
-#### Performance Metrics:
-- **Accuracy**: 85-95% on well-lit, clear signs
-- **Speed**: 30 FPS real-time processing
-- **Latency**: <100ms prediction time
-- **Memory Usage**: ~2-4GB GPU/CPU memory
+## Technical Architecture
+
+### Model Architecture
+
+#### CNN+LSTM Branch
+- **Backbone**: EfficientNet-B0 (pre-trained)
+- **Temporal Processing**: 1D convolution + batch normalization
+- **LSTM Layers**: 2x bidirectional LSTM (256, 128 hidden units)
+- **Classification**: Multi-layer perceptron with dropout
+
+#### Hand Landmark Branch
+- **Input**: 126 features (2 hands × 21 landmarks × 3 coordinates)
+- **Processing**: Linear projection to 256 dimensions
+- **LSTM Layers**: 2x bidirectional LSTM (128, 64 hidden units)
+- **Classification**: Multi-layer perceptron with dropout
+
+#### Fusion Architecture
+- **Feature Combination**: Concatenation of CNN and hand predictions
+- **Fusion Network**: 3-layer MLP (256 → 128 → num_classes)
+- **Learnable Weights**: Adaptive weighting (default: 0.7 CNN, 0.3 hand)
+- **Multi-loss Training**: Combined loss + auxiliary losses for each branch
+
+### Data Processing Pipeline
+
+#### Video Processing
+1. **Frame Extraction**: Extract frames from video files
+2. **Resize**: Standardize to 224×224 pixels
+3. **Sequence Creation**: Create 30-frame sequences
+4. **Normalization**: Scale pixel values to [0,1]
+
+#### Hand Landmark Processing
+1. **MediaPipe Detection**: Extract 21 landmarks per hand
+2. **Coordinate Normalization**: Normalize to frame dimensions
+3. **Feature Vector**: Create 126-dimensional feature vector
+4. **Sequence Alignment**: Align with video frame sequences
+
+### Performance Metrics
+
+#### Model Performance
+- **Accuracy**: 85-95% on well-trained classes
+- **Processing Speed**: 30+ FPS real-time recognition
+- **Memory Usage**: 2-4GB GPU memory during training
+- **Training Time**: 30-60 minutes for 50 classes (with GPU)
+
+#### Dataset Recommendations
+- **Videos per Class**: Minimum 50, optimal 100+ videos
+- **Video Duration**: 2-5 seconds per video
+- **Video Quality**: 720p minimum, good lighting
+- **Background**: Clean, contrasting background
+- **Signer Position**: Full upper body visible
 
 ## Troubleshooting
 
 ### Common Issues & Solutions
 
-#### 1. GPU/CUDA Issues
+#### GPU/CUDA Issues
 ```python
 # Check CUDA availability
 import torch
@@ -199,37 +240,68 @@ print(f"GPU count: {torch.cuda.device_count()}")
 **Solutions:**
 - Install appropriate PyTorch CUDA version
 - Update GPU drivers
-- Check CUDA toolkit installation
+- Verify CUDA toolkit installation
 
-#### 2. Memory Issues
+#### Memory Issues
+- Reduce batch size in training configuration
+- Use CPU training for smaller datasets
+- Close other GPU-intensive applications
+
+#### Poor Recognition Performance
+- Ensure good lighting conditions
+- Use clean, contrasting backgrounds
+- Collect more training videos per class
+- Verify hand landmarks are being detected
+
+#### Import/Dependency Errors
 ```bash
-# Reduce batch sizes in training
-CNN_BATCH_SIZE = 2  # Instead of 4
-POSE_BATCH_SIZE = 4  # Instead of 8
+# Reinstall core dependencies
+pip uninstall torch torchvision torchaudio timm mediapipe opencv-python
+pip install -r requirements.txt
 ```
 
-#### 3. Import Errors
-```bash
-# Reinstall dependencies
-pip uninstall torch torchvision torchaudio timm
-pip install torch torchvision torchaudio timm
-```
+### Performance Optimization
 
-#### 4. Camera Recognition Issues
-- **Poor Recognition**: Improve lighting, ensure clear background
-- **Slow Performance**: Reduce sequence length, use GPU
-- **No Detection**: Check camera permissions, MediaPipe setup
+#### Training Optimization
+- Use GPU acceleration when available
+- Implement data augmentation for small datasets
+- Monitor validation loss to prevent overfitting
+- Adjust learning rate based on training progress
+
+#### Recognition Optimization
+- Enable hand landmark overlay to verify detection quality
+- Adjust confidence thresholds based on use case
+- Use prediction smoothing for stable results
+- Optimize camera positioning and lighting
+
+## File Structure
+
+```
+SASL-AI/
+├── sasl_video_collector.py          # Video data collection
+├── video_cnn_only_training.py       # CNN+Hand landmark training
+├── sasl_cnn_only_recognition.py     # Real-time recognition
+├── demo_hand_overlay.py             # Hand overlay demonstration
+├── requirements.txt                 # Python dependencies
+├── README.md                        # Documentation
+├── HAND_OVERLAY_FEATURES.md         # Hand overlay feature guide
+├── video_dataset/                   # Training videos
+├── outputs/                         # Training outputs
+│   ├── training_*/                  # Training session outputs
+│   └── video_cache/                 # Processed video cache
+└── __pycache__/                     # Python cache files
+```
 
 ---
 
 <div align="center">
 
-**Made with love for the SASL Community**
+**Advanced SASL Recognition System**
 
 ![PyTorch](https://img.shields.io/badge/PyTorch-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white)
 ![OpenCV](https://img.shields.io/badge/OpenCV-27338e?style=for-the-badge&logo=OpenCV&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)
 
-*Empowering communication through AI*
+*Empowering communication through AI-powered sign language recognition*
 
 </div>
