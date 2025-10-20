@@ -30,9 +30,15 @@ import json
 import time
 from pathlib import Path
 from tqdm import tqdm
+import torch
 
-# Set device
+# Set device and import ImageNet normalization from training
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+try:
+    from video_cnn_only_training import IMAGENET_MEAN, IMAGENET_STD
+except Exception:
+    IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406])
+    IMAGENET_STD = torch.tensor([0.229, 0.224, 0.225])
 
 # Import the exact same model classes from the training file to ensure compatibility
 try:
@@ -328,14 +334,16 @@ def process_video_for_prediction(video_path, sequence_length=30, input_size=(224
                 frames.append(frames[-1])  # Repeat last frame
                 hand_landmarks_seq.append(hand_landmarks_seq[-1])  # Repeat last landmarks
         
-        # Convert to numpy arrays and normalize (MATCH TRAINING FORMAT EXACTLY)
-        video_sequence = np.array(frames, dtype=np.float32) / 255.0  # Normalize first
+        # Convert to numpy arrays and normalize with ImageNet stats (MATCH TRAINING FORMAT EXACTLY)
+        video_sequence = np.array(frames, dtype=np.float32) / 255.0
         hand_landmarks_sequence = np.array(hand_landmarks_seq, dtype=np.float32)
         
-        # Convert to tensor format matching training: (seq, C, H, W)
-        # Training uses: torch.FloatTensor(video).permute(0, 3, 1, 2)
-        # We need to match this exactly
-        video_sequence = np.transpose(video_sequence, (0, 3, 1, 2))  # (seq, H, W, C) -> (seq, C, H, W)
+        # Convert to tensor format matching training and apply ImageNet normalization per frame
+        video_tensor = torch.from_numpy(np.transpose(video_sequence, (0, 3, 1, 2))).float()  # (seq, C, H, W)
+        mean = IMAGENET_MEAN.view(1, 3, 1, 1)
+        std = IMAGENET_STD.view(1, 3, 1, 1)
+        video_tensor = (video_tensor - mean) / std
+        video_sequence = video_tensor.numpy()
         
         return video_sequence, hand_landmarks_sequence
         

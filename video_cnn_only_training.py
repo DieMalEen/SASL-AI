@@ -61,6 +61,10 @@ random.seed(42)
 if torch.cuda.is_available():
     torch.cuda.manual_seed(42)
 
+# ImageNet normalization constants (match EfficientNet pretraining)
+IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406])
+IMAGENET_STD = torch.tensor([0.229, 0.224, 0.225])
+
 def process_single_video(args):
     """
     Process a single video file for CNN + hand landmark extraction
@@ -210,11 +214,7 @@ class SASLVideoDataset(Dataset):
             label = self.labels[i]
             
             for _ in range(self.augment_factor):
-                # Augment video sequence
-                aug_video = self._augment_video_sequence(video_seq)
-                # For hand landmarks, apply minimal augmentation (small noise)
-                aug_hands = self._augment_hand_sequence(hand_seq)
-                
+                aug_video, aug_hands = self._augment_sequence_pair(video_seq, hand_seq)
                 augmented_videos.append(aug_video)
                 augmented_hands.append(aug_hands)
                 augmented_labels.append(label)
@@ -225,70 +225,115 @@ class SASLVideoDataset(Dataset):
         
         print(f"Augmentation complete: {original_count} -> {len(self.video_sequences)} videos")
     
-    def _augment_video_sequence(self, video_sequence):
-        """Apply augmentation to a video sequence"""
-        augmented_sequence = video_sequence.copy()
-        
-        # Randomly choose augmentation type
-        aug_types = ["brightness", "contrast", "rotation", "noise", "temporal"]
+    def _augment_sequence_pair(self, video_sequence, hand_sequence):
+        """Augment video frames and hand landmarks consistently for one sample."""
+        vid = video_sequence.copy()
+        hands = hand_sequence.copy()
+        seq_len, h, w, c = vid.shape
+
+        aug_types = [
+            "brightness_contrast",
+            "color_jitter",
+            "rotation",
+            "gaussian_noise",
+            "gaussian_blur",
+            "temporal",
+            "random_erasing",
+            "landmark_affine",
+        ]
         augmentation_type = np.random.choice(aug_types)
-        
-        if augmentation_type == "brightness":
-            brightness_factor = np.random.uniform(0.7, 1.3)
-            augmented_sequence = np.clip(augmented_sequence * brightness_factor, 0, 1)
-            
-        elif augmentation_type == "contrast":
-            contrast_factor = np.random.uniform(0.8, 1.2)
-            mean = np.mean(augmented_sequence, axis=(1, 2, 3), keepdims=True)
-            augmented_sequence = np.clip((augmented_sequence - mean) * contrast_factor + mean, 0, 1)
-            
+
+        if augmentation_type == "brightness_contrast":
+            b = np.random.uniform(0.85, 1.15)
+            vid = np.clip(vid * b, 0.0, 1.0)
+            if np.random.rand() < 0.8:
+                cf = np.random.uniform(0.85, 1.15)
+                mean = np.mean(vid, axis=(1, 2, 3), keepdims=True)
+                vid = np.clip((vid - mean) * cf + mean, 0.0, 1.0)
+
+        elif augmentation_type == "color_jitter":
+            sat_factor = np.random.uniform(0.85, 1.15)
+            hue_shift = np.random.uniform(-5, 5)
+            for i in range(seq_len):
+                frame = (vid[i] * 255.0).astype(np.uint8)
+                hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
+                hsv[:, :, 1] = np.clip(hsv[:, :, 1].astype(np.float32) * sat_factor, 0, 255).astype(np.uint8)
+                hsv[:, :, 0] = (hsv[:, :, 0].astype(np.int16) + int(hue_shift)) % 180
+                frame_j = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
+                vid[i] = frame_j.astype(np.float32) / 255.0
+
         elif augmentation_type == "rotation":
-            angle = np.random.uniform(-5, 5)
-            h, w = augmented_sequence.shape[1:3]
+            angle = float(np.random.uniform(-5.0, 5.0))
             center = (w // 2, h // 2)
-            rotation_matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
-            
-            for i in range(len(augmented_sequence)):
-                augmented_sequence[i] = cv2.warpAffine(
-                    augmented_sequence[i], rotation_matrix, (w, h),
-                    flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT
-                )
-                
-        elif augmentation_type == "noise":
-            noise_std = np.random.uniform(0.01, 0.05)
-            noise = np.random.normal(0, noise_std, augmented_sequence.shape)
-            augmented_sequence = np.clip(augmented_sequence + noise, 0, 1)
-            
+            rot = cv2.getRotationMatrix2D(center, angle, 1.0)
+            for i in range(seq_len):
+                vid[i] = cv2.warpAffine(vid[i], rot, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+
+        elif augmentation_type == "gaussian_noise":
+            std = float(np.random.uniform(0.005, 0.02))
+            noise = np.random.normal(0, std, vid.shape).astype(np.float32)
+            vid = np.clip(vid + noise, 0.0, 1.0)
+
+        elif augmentation_type == "gaussian_blur":
+            k = np.random.choice([3, 5])
+            for i in range(seq_len):
+                vid[i] = cv2.GaussianBlur(vid[i], (k, k), 0)
+
         elif augmentation_type == "temporal":
-            # Randomly drop or repeat some frames
-            if np.random.random() < 0.5:
-                # Drop random frames
-                drop_indices = np.random.choice(len(augmented_sequence), 
-                                             size=max(1, len(augmented_sequence) // 10), 
-                                             replace=False)
-                keep_indices = [i for i in range(len(augmented_sequence)) if i not in drop_indices]
-                augmented_sequence = augmented_sequence[keep_indices]
-                
-                # Pad back to original length
-                while len(augmented_sequence) < len(video_sequence):
-                    augmented_sequence = np.append(augmented_sequence, [augmented_sequence[-1]], axis=0)
-        
-        return augmented_sequence
-    
-    def _augment_hand_sequence(self, hand_sequence):
-        """Apply minimal augmentation to hand landmark sequence"""
-        augmented_hands = hand_sequence.copy()
-        
-        # Add small amount of noise to hand landmarks
-        if np.random.random() < 0.7:  # 70% chance to add noise
-            noise_std = np.random.uniform(0.001, 0.01)  # Very small noise
-            noise = np.random.normal(0, noise_std, augmented_hands.shape)
-            augmented_hands = augmented_hands + noise
-            
-            # Clip to reasonable ranges (landmarks should be in [0,1] for x,y and [-1,1] for z)
-            augmented_hands = np.clip(augmented_hands, -1.0, 1.0)
-        
-        return augmented_hands
+            drop_ratio = np.random.uniform(0.05, 0.15)
+            n_drop = max(1, int(seq_len * drop_ratio))
+            drop_idx = set(np.random.choice(seq_len, n_drop, replace=False).tolist())
+            keep_idx = [i for i in range(seq_len) if i not in drop_idx]
+            if not keep_idx:
+                keep_idx = list(range(seq_len))
+            vid = vid[keep_idx]
+            hands = hands[keep_idx]
+            while len(vid) < seq_len:
+                vid = np.append(vid, [vid[-1]], axis=0)
+                hands = np.append(hands, [hands[-1]], axis=0)
+
+        elif augmentation_type == "random_erasing":
+            area_ratio = np.random.uniform(0.02, 0.07)
+            erase_frames = np.random.choice(seq_len, size=max(1, seq_len // 6), replace=False)
+            erase_h = max(1, int(h * np.sqrt(area_ratio) * np.random.uniform(0.8, 1.2)))
+            erase_w = max(1, int(w * np.sqrt(area_ratio) * np.random.uniform(0.8, 1.2)))
+            for i in erase_frames:
+                y = np.random.randint(0, max(1, h - erase_h + 1))
+                x = np.random.randint(0, max(1, w - erase_w + 1))
+                val = np.random.uniform(0.0, 1.0)
+                vid[i, y:y+erase_h, x:x+erase_w, :] = val
+
+        elif augmentation_type == "landmark_affine":
+            scale = np.random.uniform(0.97, 1.03)
+            rot_deg = np.random.uniform(-3.0, 3.0)
+            rot_rad = np.deg2rad(rot_deg)
+            cos_r, sin_r = np.cos(rot_rad), np.sin(rot_rad)
+            hands_r = hands.reshape(hands.shape[0], 2, 21, 3)
+            xy = hands_r[..., :2]
+            xy_centered = xy - 0.5
+            x_new = (xy_centered[..., 0] * cos_r - xy_centered[..., 1] * sin_r) * scale
+            y_new = (xy_centered[..., 0] * sin_r + xy_centered[..., 1] * cos_r) * scale
+            xy_j = np.stack([x_new, y_new], axis=-1) + 0.5
+            xy_j = np.clip(xy_j, 0.0, 1.0)
+            hands_r[..., :2] = xy_j
+            if np.random.rand() < 0.7:
+                z_noise = np.random.normal(0, 0.005, hands_r[..., 2].shape)
+                hands_r[..., 2] = np.clip(hands_r[..., 2] + z_noise, -1.0, 1.0)
+            if np.random.rand() < 0.15:
+                hand_idx = np.random.choice([0, 1])
+                hands_r[:, hand_idx, :, :] = 0.0
+            hands = hands_r.reshape(hands.shape[0], -1)
+
+        # Always apply tiny landmark noise sometimes
+        if np.random.rand() < 0.6:
+            noise_std = np.random.uniform(0.001, 0.006)
+            hands = hands + np.random.normal(0, noise_std, hands.shape)
+            hands_r2 = hands.reshape(hands.shape[0], 2, 21, 3)
+            hands_r2[..., 0:2] = np.clip(hands_r2[..., 0:2], 0.0, 1.0)
+            hands_r2[..., 2] = np.clip(hands_r2[..., 2], -1.0, 1.0)
+            hands = hands_r2.reshape(hands.shape[0], -1)
+
+        return vid, hands
     
     def __len__(self):
         return len(self.video_sequences)
@@ -298,8 +343,14 @@ class SASLVideoDataset(Dataset):
         hands = torch.FloatTensor(self.hand_landmarks[idx])  # (seq, hand_features)
         label = torch.LongTensor([self.labels[idx]])
         
+        # Apply ImageNet normalization per frame, per channel
+        # video is (seq, C, H, W); broadcast mean/std to (1, C, 1, 1)
+        mean = IMAGENET_MEAN.view(1, 3, 1, 1)
+        std = IMAGENET_STD.view(1, 3, 1, 1)
+        video = (video - mean) / std
+
+        # If additional transforms were provided, apply after normalization per-frame
         if self.transform:
-            # Apply transforms to each frame
             transformed_frames = []
             for frame in video:
                 transformed_frames.append(self.transform(frame))
@@ -659,7 +710,8 @@ class CNNOnlyVideoSASLTrainer:
                 'augmentation_factor': self.augmentation_factor,
                 'optimizer': 'Adam',
                 'scheduler': 'ReduceLROnPlateau',
-                'early_stopping_patience': 15
+                'early_stopping_patience': 15,
+                'normalization': 'imagenet_mean_std'
             },
             
             # Dataset information
@@ -927,7 +979,7 @@ class CNNOnlyVideoSASLTrainer:
         best_acc = 0.0
         patience_counter = 0
         
-        # Training loop
+    # Training loop (stage 1: head + LSTMs, backbone frozen)
         print(f"\\n" + "="*60)
         print("TRAINING CNN+LSTM MODEL")
         print("="*60)
@@ -1037,6 +1089,7 @@ class CNNOnlyVideoSASLTrainer:
                 print(f"\\nEarly stopping triggered after {patience_counter} epochs without improvement")
                 break
         
+
         # Add dataset size to training history for results
         training_history['dataset_size'] = len(video_sequences)
         

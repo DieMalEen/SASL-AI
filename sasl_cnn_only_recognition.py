@@ -26,7 +26,7 @@ import timm
 
 # Import the models from training file to ensure compatibility
 try:
-    from video_cnn_only_training import CNNLSTMModel, CombinedCNNHandModel, MEDIAPIPE_AVAILABLE
+    from video_cnn_only_training import CNNLSTMModel, CombinedCNNHandModel, MEDIAPIPE_AVAILABLE, IMAGENET_MEAN, IMAGENET_STD
     print("Successfully imported models from training module")
     
     # MediaPipe for hand detection (if available)
@@ -234,9 +234,14 @@ class SASLCNNOnlyCameraRecognition:
         ):
             return None, None, []
         
-        # Prepare video sequence with proper normalization (same as training)
-        video_sequence = np.array(list(self.frame_buffer)) / 255.0
-        video_tensor = torch.FloatTensor(video_sequence).unsqueeze(0).permute(0, 1, 4, 2, 3).to(device)
+        # Prepare video sequence with proper normalization (same as training: ImageNet)
+        video_sequence = np.array(list(self.frame_buffer), dtype=np.float32) / 255.0
+        video_tensor = torch.from_numpy(video_sequence).unsqueeze(0).permute(0, 1, 4, 2, 3)
+        # Apply ImageNet normalization per frame
+        mean = IMAGENET_MEAN.view(1, 1, 3, 1, 1)
+        std = IMAGENET_STD.view(1, 1, 3, 1, 1)
+        video_tensor = (video_tensor - mean) / std
+        video_tensor = video_tensor.to(device)
         
         with torch.no_grad():
             if self.is_combined_model and self.use_hand_landmarks:
