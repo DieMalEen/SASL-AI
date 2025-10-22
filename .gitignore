@@ -12,6 +12,10 @@ outputs/*
 test_videos/*
 !test_videos/.gitkeep
 
+# Image dataset
+image_dataset/*
+!image_dataset/.gitkeep
+
 # Python
 __pycache__/
 *.py[cod]

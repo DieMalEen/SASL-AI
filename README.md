@@ -2,13 +2,13 @@
 
 <div align="center">
 
-![SASL-AI Banner](https://img.shields.io/badge/SASL--AI-PyTorch-blue?style=for-the-badge&logo=pytorch)
-![Python](https://img.shields.io/badge/Python-3.8+-green?style=for-the-badge&logo=python)
+![SASL-AI Banner](https://img.shields.io/badge/SASL--AI-Hand_Landmarks-blue?style=for-the-badge)
+![Python](https://img.shields.io/badge/Python-3.11+-green?style=for-the-badge&logo=python)
 ![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)
 
-**Advanced South African Sign Language Recognition using PyTorch Deep Learning**
+**South African Sign Language Recognition using MediaPipe Hand Landmarks and Random Forest**
 
-Real-time SASL recognition with CNN+LSTM and MediaPipe hand landmark fusion models for enhanced accuracy and robustness.
+Real-time SASL gesture recognition with MediaPipe hand landmark extraction and machine learning classification for accurate and efficient sign detection.
 
 </div>
 
@@ -20,288 +20,363 @@ git clone <your-repo-url>
 cd SASL-AI
 pip install -r requirements.txt
 
-# Run video collection
-python sasl_video_collector.py
+# Collect hand landmark data
+python realtime_data_collection.py
 
-# Train the model
-python video_cnn_only_training.py
+# Train the Random Forest model
+python train_hand_landmark_model.py
 
 # Run live recognition
-python sasl_cnn_only_recognition.py
+python realtime_camera_recognition.py
 ```
 
 ## System Overview
 
 ### Core Architecture
-- **CNN+LSTM Model**: EfficientNet backbone with bidirectional LSTM for temporal modeling
-- **MediaPipe Hand Landmarks**: 21 hand landmarks per hand (up to 2 hands) for precise gesture analysis
-- **Combined Fusion Model**: Integrates video frames and hand landmark data for superior accuracy
-- **Real-time Processing**: 30+ FPS recognition with GPU acceleration
-- **Hand Overlay Toggle**: Visual feedback showing detected hand landmarks
+- **MediaPipe Hand Tracking**: Detects up to 2 hands simultaneously with 21 landmarks per hand
+- **Hand Landmark Features**: 126-dimensional feature vectors (63 per hand: 21 landmarks x 3 coordinates)
+- **Random Forest Classifier**: 200 decision trees for robust gesture classification
+- **Real-time Processing**: 30+ FPS recognition with minimal computational requirements
+- **Combined Gesture Classes**: Merges visually similar gestures (L/7, O/0, V/2) for improved accuracy
 
 ### Key Components
-- **Video Data Collection**: Structured dataset creation with automated organization
-- **PyTorch Training Pipeline**: Modern deep learning with comprehensive monitoring
-- **Live Camera Recognition**: Real-time sign language detection with confidence scoring
-- **Hand Landmark Integration**: MediaPipe-powered hand tracking for enhanced accuracy
+- **Real-time Data Collection**: Interactive keyboard-driven data collection with continuous capture mode
+- **Dual-Hand Support**: Recognizes gestures using left hand, right hand, or both hands simultaneously
+- **Scikit-learn Training Pipeline**: Efficient machine learning with comprehensive evaluation metrics
+- **Live Camera Recognition**: Real-time gesture detection with confidence scoring and prediction smoothing
 
 ## Installation
 
 ### System Requirements
-- **Python**: 3.8 or higher
+- **Python**: 3.11 or higher
 - **OS**: Windows 10/11, macOS, or Linux
-- **GPU**: CUDA-compatible GPU (optional, but recommended)
-- **RAM**: 8GB minimum, 16GB recommended for training
-- **Storage**: 5GB free space for models and dataset
+- **GPU**: Not required (CPU-based processing)
+- **RAM**: 4GB minimum, 8GB recommended
+- **Storage**: 1GB free space for models and dataset
+- **Camera**: Webcam or external camera for data collection and recognition
 
 ### Dependencies Installation
 
 ```bash
-# Install PyTorch (CPU version)
-pip install torch torchvision torchaudio
-
-# Install PyTorch (GPU version with CUDA 11.8)
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-
-# Install remaining dependencies
+# Install all dependencies
 pip install -r requirements.txt
 ```
 
 ### Required Python Packages
 
 ```
-# Core Deep Learning
-torch>=2.0.0
-torchvision>=0.15.0
-torchaudio>=2.0.0
-timm>=0.9.0
-
-# Computer Vision & Processing  
+# Computer Vision & Hand Tracking
 opencv-python>=4.8.0
 mediapipe>=0.10.7
-pillow>=10.0.0
 
-# Scientific Computing
-numpy>=1.24.0
-scipy>=1.10.0
+# Machine Learning
 scikit-learn>=1.3.0
+numpy>=1.24.0
 
-# Progress & Utilities
-tqdm>=4.65.0
+# Data Processing & Visualization
+pandas>=2.0.0
 matplotlib>=3.7.0
 seaborn>=0.12.0
+
+# Model Persistence
+joblib>=1.3.0
 ```
 
 ## Usage Guide
 
 ### 1. Data Collection
 
-Create training videos for your SASL signs:
+Collect hand landmark data for SASL gestures:
 
 ```bash
-python sasl_video_collector.py
+python realtime_data_collection.py
 ```
 
 **Collection Process:**
-- Select sign class name
-- Record 2-5 second videos per sign
-- Automatic file naming and organization
-- Real-time video preview
-- Structured dataset creation
+- Press keys to select gesture class (0-9, A-Z)
+- Show gesture to camera
+- HOLD ENTER to capture continuously (frame-by-frame)
+- Release ENTER to stop capturing
+- Press TAB to view collection statistics
+- Press ESC to quit
 
-**Dataset Structure:**
+**Supported Classes (34 total):**
+- Numbers: 1, 3, 4, 5, 6, 8, 9, 10
+- Letters: a, b, c, d, e, f, g, h, i, j, k, m, n, p, q, r, s, t, u, w, x, y, z
+- Combined: l(7), o(0), v(2)
+
+**Key Mappings:**
+- `L` or `7` -> l(7) class (visually similar)
+- `O` or `0` -> o(0) class (visually similar)
+- `V` or `2` -> v(2) class (visually similar)
+- `-` (minus) -> 10 class
+
+**Dataset Output:**
 ```
-video_dataset/
-├── sign1/
-│   ├── video001.mp4
-│   ├── video002.mp4
-│   └── ...
-├── sign2/
-│   ├── video001.mp4
-│   └── ...
-└── ...
+outputs/
+└── hand_landmarks.csv    # CSV with 128 columns
+                          # Format: class, hands_used, 126 features
 ```
 
 ### 2. Model Training
 
-Train the combined CNN+Hand landmark model:
+Train the Random Forest classifier on collected hand landmark data:
 
 ```bash
-python video_cnn_only_training.py
+python train_hand_landmark_model.py
 ```
 
 **Training Features:**
-- **Dual Architecture**: CNN branch for video frames, Hand branch for MediaPipe landmarks
-- **Data Augmentation**: Brightness, contrast, rotation, noise, and temporal augmentation
-- **Early Stopping**: Prevents overfitting with patience mechanism
-- **Learning Rate Scheduling**: Adaptive learning rate adjustment
-- **Comprehensive Monitoring**: Real-time loss and accuracy tracking
-- **GPU Acceleration**: Automatic CUDA detection and optimization
+- **Mixed Format Support**: Handles both old (65-column) and new (128-column) CSV formats
+- **Class Combination**: Automatically merges visually similar classes (0/o, 2/v)
+- **Random Forest**: 200 trees with max_depth=20 for robust classification
+- **Train/Test Split**: 80/20 split with stratification
+- **Feature Scaling**: StandardScaler normalization
+- **Comprehensive Metrics**: Accuracy, precision, recall, F1-score, confusion matrix
+- **Class Filtering**: Removes classes with fewer than 2 samples
 
 **Training Output Structure:**
 ```
-outputs/training_YYYYMMDD_HHMMSS/
-├── models/
-│   └── best_sasl_cnn_lstm_model.pth
-├── plots/
-│   └── cnn_lstm_training_history.png
-├── confusion_matrices/
-│   └── cnn_hand_fusion_confusion_matrix.png
-└── results/
-    ├── cnn_training_results.json
-    ├── class_names.json
-    └── training_summary.txt
+outputs/hand_landmark_model_YYYYMMDD_HHMMSS/
+├── random_forest_model.joblib       # Trained Random Forest model
+├── scaler.joblib                    # Feature scaler
+├── label_encoder.joblib             # Class label encoder
+├── confusion_matrix.png             # Confusion matrix visualization
+├── feature_importance.png           # Top feature importance plot
+├── class_distribution.png           # Training data distribution
+└── training_report.txt              # Detailed classification report
 ```
 
 ### 3. Live Recognition
 
-Launch real-time SASL recognition:
+Launch real-time SASL gesture recognition:
 
 ```bash
-python sasl_cnn_only_recognition.py
+python realtime_camera_recognition.py
 ```
 
 **Recognition Features:**
-- **Combined Model Support**: Uses both CNN and hand landmark data when available
-- **Automatic Fallback**: Falls back to CNN-only for older models
-- **Hand Overlay Toggle**: Press 'H' to show/hide hand landmarks visualization
-- **Confidence Filtering**: Adjustable confidence thresholds
-- **Top-3 Predictions**: Multiple prediction display with confidence scores
-- **Prediction Smoothing**: Temporal smoothing for stable results
+- **Dual-Hand Detection**: Recognizes gestures using left, right, or both hands
+- **Auto-Model Detection**: Automatically loads the latest trained model
+- **Format Compatibility**: Works with both 63-feature (single hand) and 126-feature (dual hand) models
+- **Prediction Smoothing**: Uses majority voting over last 10 frames for stable predictions
+- **Confidence Display**: Shows prediction confidence percentage
+- **Hand Visualization**: Draws MediaPipe hand landmarks on video feed
+
+**On-Screen Display:**
+- Current prediction with confidence
+- Hand usage indicator (LEFT, RIGHT, or LEFT + RIGHT)
+- Hand landmarks overlay
+- Frame counter
 
 **Controls:**
 - **'Q'**: Quit recognition
-- **'R'**: Reset prediction buffer
-- **'H'**: Toggle hand landmarks overlay (when available)
+- **ESC**: Quit recognition
 
 ## Technical Architecture
 
-### Model Architecture
+### Hand Landmark Extraction
 
-#### CNN+LSTM Branch
-- **Backbone**: EfficientNet-B0 (pre-trained)
-- **Temporal Processing**: 1D convolution + batch normalization
-- **LSTM Layers**: 2x bidirectional LSTM (256, 128 hidden units)
-- **Classification**: Multi-layer perceptron with dropout
+**MediaPipe Hands Configuration:**
+- **Max Hands**: 2 (supports dual-hand gestures)
+- **Detection Confidence**: 0.7
+- **Tracking Confidence**: 0.7
+- **Static Image Mode**: False (optimized for video)
 
-#### Hand Landmark Branch
-- **Input**: 126 features (2 hands × 21 landmarks × 3 coordinates)
-- **Processing**: Linear projection to 256 dimensions
-- **LSTM Layers**: 2x bidirectional LSTM (128, 64 hidden units)
-- **Classification**: Multi-layer perceptron with dropout
+**Landmark Structure:**
+- 21 landmarks per hand
+- 3 coordinates per landmark (x, y, z)
+- Total: 63 features per hand
+- Combined: 126 features for two hands
 
-#### Fusion Architecture
-- **Feature Combination**: Concatenation of CNN and hand predictions
-- **Fusion Network**: 3-layer MLP (256 → 128 → num_classes)
-- **Learnable Weights**: Adaptive weighting (default: 0.7 CNN, 0.3 hand)
-- **Multi-loss Training**: Combined loss + auxiliary losses for each branch
+**Landmark Points:**
+```
+WRIST, THUMB_CMC, THUMB_MCP, THUMB_IP, THUMB_TIP,
+INDEX_FINGER_MCP, INDEX_FINGER_PIP, INDEX_FINGER_DIP, INDEX_FINGER_TIP,
+MIDDLE_FINGER_MCP, MIDDLE_FINGER_PIP, MIDDLE_FINGER_DIP, MIDDLE_FINGER_TIP,
+RING_FINGER_MCP, RING_FINGER_PIP, RING_FINGER_DIP, RING_FINGER_TIP,
+PINKY_MCP, PINKY_PIP, PINKY_DIP, PINKY_TIP
+```
 
-### Data Processing Pipeline
+### Classification Model
 
-#### Video Processing
-1. **Frame Extraction**: Extract frames from video files
-2. **Resize**: Standardize to 224×224 pixels
-3. **Sequence Creation**: Create 30-frame sequences
-4. **Normalization**: Scale pixel values to [0,1]
+**Random Forest Classifier:**
+- **Estimators**: 200 decision trees
+- **Max Depth**: 20
+- **Min Samples Split**: 5
+- **Random State**: 42 (reproducible results)
+- **Feature Preprocessing**: StandardScaler normalization
 
-#### Hand Landmark Processing
-1. **MediaPipe Detection**: Extract 21 landmarks per hand
-2. **Coordinate Normalization**: Normalize to frame dimensions
-3. **Feature Vector**: Create 126-dimensional feature vector
-4. **Sequence Alignment**: Align with video frame sequences
+### Data Format
+
+**CSV Structure (128 columns):**
+1. `class` - Gesture class label (e.g., 'a', '5', 'o(0)', 'v(2)')
+2. `hands_used` - Hand usage ('left', 'right', or 'both')
+3. `left_x0` to `left_z20` - Left hand features (63 columns)
+4. `right_x0` to `right_z20` - Right hand features (63 columns)
+
+**Backward Compatibility:**
+- Old 65-column format: class, hand_label, 63 features
+- Automatically converted to 128-column format during training
+- Missing hand features filled with zeros
 
 ### Performance Metrics
 
 #### Model Performance
-- **Accuracy**: 85-95% on well-trained classes
-- **Processing Speed**: 30+ FPS real-time recognition
-- **Memory Usage**: 2-4GB GPU memory during training
-- **Training Time**: 30-60 minutes for 50 classes (with GPU)
+- **Accuracy**: 90-97% on well-trained classes with 50+ samples each
+- **Processing Speed**: 30+ FPS real-time recognition (CPU-based)
+- **Memory Usage**: <500MB during training, <200MB during inference
+- **Training Time**: 1-5 minutes for 35 classes (CPU)
+- **Model Size**: <50MB (lightweight Random Forest)
 
 #### Dataset Recommendations
-- **Videos per Class**: Minimum 50, optimal 100+ videos
-- **Video Duration**: 2-5 seconds per video
-- **Video Quality**: 720p minimum, good lighting
-- **Background**: Clean, contrasting background
-- **Signer Position**: Full upper body visible
+- **Samples per Class**: Minimum 30, optimal 100+ samples
+- **Data Collection**: Use continuous capture mode (10-30 samples/second)
+- **Camera Quality**: 720p minimum, good lighting conditions
+- **Background**: Clean, contrasting background preferred
+- **Hand Position**: Keep hands visible within camera frame
+- **Variation**: Collect samples with different hand angles and positions
 
 ## Troubleshooting
 
 ### Common Issues & Solutions
 
-#### GPU/CUDA Issues
+#### Camera Not Detected
 ```python
-# Check CUDA availability
-import torch
-print(f"CUDA available: {torch.cuda.is_available()}")
-print(f"GPU count: {torch.cuda.device_count()}")
+# Test camera access
+import cv2
+cap = cv2.VideoCapture(0)
+if not cap.isOpened():
+    print("Camera not accessible")
 ```
 
 **Solutions:**
-- Install appropriate PyTorch CUDA version
-- Update GPU drivers
-- Verify CUDA toolkit installation
+- Check camera permissions in OS settings
+- Try different camera IDs (0, 1, 2)
+- Ensure no other applications are using the camera
+- Reconnect external camera if applicable
 
-#### Memory Issues
-- Reduce batch size in training configuration
-- Use CPU training for smaller datasets
-- Close other GPU-intensive applications
+#### Hand Landmarks Not Detected
+**Solutions:**
+- Ensure adequate lighting in room
+- Keep hands within camera frame
+- Use plain/contrasting background
+- Clean camera lens
+- Check MediaPipe installation: `pip install --upgrade mediapipe`
 
-#### Poor Recognition Performance
-- Ensure good lighting conditions
-- Use clean, contrasting backgrounds
-- Collect more training videos per class
-- Verify hand landmarks are being detected
+#### Poor Recognition Accuracy
+**Solutions:**
+- Collect more training samples (100+ per class recommended)
+- Ensure consistent gesture execution during collection
+- Collect samples with varied hand angles
+- Verify hand landmarks are detected during collection
+- Retrain model after collecting more data
+
+#### CSV Format Errors
+**Solutions:**
+- Delete corrupted hand_landmarks.csv and restart collection
+- Training script automatically handles mixed formats
+- Check for partial writes (incomplete rows)
 
 #### Import/Dependency Errors
 ```bash
 # Reinstall core dependencies
-pip uninstall torch torchvision torchaudio timm mediapipe opencv-python
+pip uninstall opencv-python mediapipe scikit-learn
 pip install -r requirements.txt
 ```
 
 ### Performance Optimization
 
-#### Training Optimization
-- Use GPU acceleration when available
-- Implement data augmentation for small datasets
-- Monitor validation loss to prevent overfitting
-- Adjust learning rate based on training progress
+#### Data Collection Tips
+- Use continuous capture (HOLD ENTER) for rapid collection
+- Collect 50-100 samples per class minimum
+- Vary hand position and angle slightly for robustness
+- Ensure both hands are visible for dual-hand gestures
+- Press TAB regularly to check sample distribution
 
 #### Recognition Optimization
-- Enable hand landmark overlay to verify detection quality
-- Adjust confidence thresholds based on use case
-- Use prediction smoothing for stable results
-- Optimize camera positioning and lighting
+- Use good lighting conditions
+- Position camera at chest/face level
+- Keep hands centered in frame
+- Execute gestures clearly and consistently
+- Allow model to stabilize (prediction smoothing takes ~10 frames)
+
+## Combined Gesture Classes
+
+To improve recognition accuracy, visually similar gestures are combined into single classes:
+
+### l(7) - Letter L and Number 7
+- **Why Combined**: L-shaped hand position looks identical
+- **Trigger Keys**: Press `L` or `7` to select this class
+- **Label**: Displays as "l(7)" in recognition
+
+### o(0) - Letter O and Number 0
+- **Why Combined**: Circular/oval hand shape looks identical
+- **Trigger Keys**: Press `O` or `0` to select this class
+- **Label**: Displays as "o(0)" in recognition
+
+### v(2) - Letter V and Number 2
+- **Why Combined**: Two fingers extended (peace sign = number 2)
+- **Trigger Keys**: Press `V` or `2` to select this class
+- **Label**: Displays as "v(2)" in recognition
+
+**Benefits:**
+- Eliminates model confusion between visually identical gestures
+- Improves overall accuracy by reducing ambiguous classifications
+- Historical data automatically converted during training
+
+See `COMBINED_CLASSES.md` for detailed information.
 
 ## File Structure
 
 ```
 SASL-AI/
-├── sasl_video_collector.py          # Video data collection
-├── video_cnn_only_training.py       # CNN+Hand landmark training
-├── sasl_cnn_only_recognition.py     # Real-time recognition
-├── demo_hand_overlay.py             # Hand overlay demonstration
+├── realtime_data_collection.py      # Interactive hand landmark data collection
+├── train_hand_landmark_model.py     # Random Forest model training
+├── realtime_camera_recognition.py   # Real-time gesture recognition
 ├── requirements.txt                 # Python dependencies
-├── README.md                        # Documentation
-├── HAND_OVERLAY_FEATURES.md         # Hand overlay feature guide
-├── video_dataset/                   # Training videos
-├── outputs/                         # Training outputs
-│   ├── training_*/                  # Training session outputs
-│   └── video_cache/                 # Processed video cache
+├── README.md                        # This documentation
+├── COMBINED_CLASSES.md              # Combined classes guide
+├── TWO_HAND_GUIDE.md                # Two-hand feature documentation
+├── CONTROLS_UPDATE.md               # Control key reference
+├── CONTINUOUS_CAPTURE.md            # Continuous capture feature guide
+├── outputs/                         # Training outputs and models
+│   ├── hand_landmarks.csv           # Collected training data
+│   ├── hand_landmark_model_*/       # Trained model outputs
+│   └── video_cache/                 # Cache directory
 └── __pycache__/                     # Python cache files
 ```
+
+## Advanced Features
+
+### Continuous Capture Mode
+- HOLD ENTER to capture samples on every frame
+- 10-30x faster than single-capture mode
+- Live counter shows samples collected
+- Visual feedback with red "RECORDING" indicator
+
+### Dual-Hand Support
+- Detects and tracks up to 2 hands simultaneously
+- Tracks which hand(s) used for each gesture
+- Supports left-only, right-only, and two-hand gestures
+- Backward compatible with single-hand data
+
+### Mixed Format Handling
+- Training automatically handles both old and new CSV formats
+- Converts 65-column (single hand) to 128-column (dual hand)
+- No need to recollect old data
 
 ---
 
 <div align="center">
 
-**Advanced SASL Recognition System**
+**SASL Hand Landmark Recognition System**
 
-![PyTorch](https://img.shields.io/badge/PyTorch-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white)
+![MediaPipe](https://img.shields.io/badge/MediaPipe-0F9D58?style=for-the-badge&logo=google&logoColor=white)
+![Scikit-learn](https://img.shields.io/badge/scikit--learn-F7931E?style=for-the-badge&logo=scikit-learn&logoColor=white)
 ![OpenCV](https://img.shields.io/badge/OpenCV-27338e?style=for-the-badge&logo=OpenCV&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)
 
-*Empowering communication through AI-powered sign language recognition*
+Empowering communication through AI-powered sign language recognition
 
 </div>
